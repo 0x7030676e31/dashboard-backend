@@ -10,19 +10,14 @@ use tokio::sync::RwLock;
 mod state;
 mod routes;
 mod macros;
+mod consts;
 
 pub use macros::macros as logs;
 pub type AppState = Arc<RwLock<State>>;
 
-#[cfg(debug_assertions)]
-const LOG_LEVEL: &str = "debug";
-
-#[cfg(not(debug_assertions))]
-const LOG_LEVEL: &str = "info";
-
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-  env::set_var("RUST_LOG", LOG_LEVEL);
+  env::set_var("RUST_LOG", "INFO");
   env_logger::init();
 
   let port = env::var("PORT").map_or(2137, |port| port.parse().unwrap_or(2137));

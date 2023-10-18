@@ -1,4 +1,4 @@
-use super::state::PATH;
+use crate::consts;
 
 use std::path::Path;
 use std::{fs, io};
@@ -37,7 +37,7 @@ impl Patient {
   }
 
   pub fn write(&self) {
-    let path = format!("{}/{}.json", PATH, self.uuid);
+    let _path = format!("{}/{}.json", consts::PATH, self.uuid);
     // match fs::write(path, serde_json::to_string(self).unwrap()) {
   }
 }
