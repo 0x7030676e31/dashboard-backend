@@ -5,6 +5,7 @@ mod oauth;
 pub fn get_routes() -> Scope {
   web::scope("")
     .service(oauth::index)
+    .service(oauth::oauth)
     .service(api())
 }
 

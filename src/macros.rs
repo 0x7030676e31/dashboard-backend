@@ -5,9 +5,9 @@ pub mod macros {
     }
   }
 
-  macro_rules! debug {
+  macro_rules! warning {
     ($($arg:tt)*) => {
-      log::debug!($($arg)*);
+      log::warn!($($arg)*);
     }
   }
 
@@ -17,5 +17,5 @@ pub mod macros {
     }
   }
 
-  pub(crate) use { info, debug, error };
+  pub(crate) use { info, warning, error };
 }

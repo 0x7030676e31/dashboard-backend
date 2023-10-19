@@ -4,11 +4,11 @@ pub const PATH: &'static str = concat!(env!("HOME"), "/.config/dashboard");
 #[cfg(production)]
 pub const PATH: &'static str = "./";
 
-// Google OAuth2 redirect URI
+// Site URL
 #[cfg(not(production))]
-pub const REDIRECT: &'static str = "http://localhost:2137/oauth";
+pub const URL: &'static str = "http://localhost:2137";
 #[cfg(production)]
-pub const REDIRECT: &'static str = ""; // Todo: add production redirect URI
+pub const URL: &'static str = ""; // Todo: add production URL
 
 // Google OAuth2 scope
-pub const SCOPE: &'static str = "https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.profile";
+pub const SCOPES: [&'static str; 2] = ["https://www.googleapis.com/auth/calendar", "https://www.googleapis.com/auth/userinfo.profile"];
