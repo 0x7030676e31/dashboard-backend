@@ -1,4 +1,4 @@
-use std::process::exit;
+use std::sync::Arc;
 
 use crate::state::state::{UserInfo, User};
 use crate::AppState;
@@ -92,12 +92,15 @@ pub async fn oauth(state: web::Data<AppState>, query: web::Query<Query>) -> Eith
   };
 
   let (tx, rx) = mpsc::channel(1);
+  let write_tx = appstate.write_tx.clone();
   let user = User {
     access_token: res.access_token,
     user_info: user,
     expires_at: res.expires_in + Utc::now().timestamp() as u64,
     refresh_token: res.refresh_token,
     stop_tx: tx,
+    write_tx,
+    secrets: Arc::clone(&appstate.secrets),
   };
 
   drop(appstate);

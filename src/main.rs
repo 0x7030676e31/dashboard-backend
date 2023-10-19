@@ -22,7 +22,11 @@ async fn main() -> std::io::Result<()> {
 
   let port = env::var("PORT").map_or(2137, |port| port.parse().unwrap_or(2137));
   logs::info!("Starting server on port {}...", port);
-  let state = Arc::new(RwLock::new(State::new()?));
+  
+  let (state, write_rx) = State::new()?;
+  let state = Arc::new(RwLock::new(state));
+
+  State::start_write_loop(Arc::clone(&state), write_rx);
 
   HttpServer::new(move || {
     App::new()
