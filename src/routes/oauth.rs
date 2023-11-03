@@ -1,12 +1,15 @@
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
-use crate::state::state::{UserInfo, User};
+use crate::state::state::ArcState;
+use crate::state::user::{UserInfo, User};
 use crate::AppState;
 use crate::consts;
 use crate::logs::*;
 
-use actix_web::{Responder, web, Either};
+use actix_web::{Responder, web, Either, HttpResponse};
 use chrono::Utc;
+use futures::future;
 use reqwest::Client;
 use tokio::sync::mpsc;
 
@@ -15,7 +18,7 @@ pub async fn index(state: web::Data<AppState>) -> impl Responder {
   let appstate = state.read().await;
   let url = format!("https://accounts.google.com/o/oauth2/v2/auth?scope={}&access_type=offline&response_type=code&redirect_uri={}&client_id={}&prompt=consent",
     consts::SCOPES.join(" "),
-    format!("{}/oauth", consts::URL),
+    format!("{}/oauth", crate::get_url()),
     appstate.secrets.client_id
   );
 
@@ -60,7 +63,7 @@ pub async fn oauth(state: web::Data<AppState>, query: web::Query<Query>) -> Eith
     ("code", &code),
     ("client_id", &appstate.secrets.client_id),
     ("client_secret", &appstate.secrets.client_secret),
-    ("redirect_uri", &format!("{}/oauth", consts::URL)),
+    ("redirect_uri", &format!("{}/oauth", crate::get_url())),
     ("grant_type", &"authorization_code".into()),
   ])
   .send()
@@ -70,6 +73,7 @@ pub async fn oauth(state: web::Data<AppState>, query: web::Query<Query>) -> Eith
     Ok(res) => res,
     Err(err) => return Either::Left(format!("Error: {}", err)),
   };
+
 
   let res = match res.json::<GoogleResp>().await {
     Ok(res) => res,
@@ -91,21 +95,61 @@ pub async fn oauth(state: web::Data<AppState>, query: web::Query<Query>) -> Eith
     Err(err) => return Either::Left(format!("Error: {}", err)),
   };
 
-  let (tx, rx) = mpsc::channel(1);
-  let write_tx = appstate.write_tx.clone();
-  let user = User {
-    access_token: res.access_token,
-    user_info: user,
-    expires_at: res.expires_in + Utc::now().timestamp() as u64,
-    refresh_token: res.refresh_token,
-    stop_tx: tx,
-    write_tx,
-    secrets: Arc::clone(&appstate.secrets),
-  };
+  if consts::USERS.iter().any(|mail| mail == &user.email) {
+    warning!("Someone tried to authorize with an unauthorized email");
+    return Either::Left("Error: unauthorized email".into());
+  }
 
   drop(appstate);
+  
+  
   let mut appstate = state.write().await;
-  appstate.add_new_user(user, rx);
+  let futures = appstate.users.values().map(|u| u.read());
+  let token = future::join_all(futures).await.iter().find_map(|u| {
+    if u.user_info.email == user.email { Some(u.access_token.clone()) } else { None }
+  });
 
-  Either::Right(web::Redirect::to(format!("{}/dashboard", consts::URL)))
+  let token = match token {
+    Some(token) => token,
+    None => {
+      let (tx, rx) = mpsc::channel(1);
+      let write_tx = appstate.write_tx.clone();
+
+      let user = User {
+        access_token: res.access_token,
+        user_info: user,
+        expires_at: res.expires_in + Utc::now().timestamp() as u64,
+        refresh_token: res.refresh_token,
+        stop_tx: tx,
+        write_tx,
+        secrets: Arc::clone(&appstate.secrets),
+      };
+
+      appstate.add_new_user(user, rx)
+    }
+  };
+  
+  drop(appstate);
+  let code = state.new_code(&token).await;
+
+  Either::Right(web::Redirect::to(format!("{}/dashboard?code={}", consts::URL, code)))
+}
+
+#[actix_web::post("/auth")]
+pub async fn auth(state: web::Data<AppState>, code: web::Bytes) -> impl Responder {
+  let mut appstate = state.write().await;
+  let code = String::from_utf8(code.to_vec()).unwrap();
+  match appstate.auth_codes.entry(code) {
+    Entry::Occupied(entry) => {
+      let token = entry.get().clone();
+      entry.remove();
+      
+      info!("User {} authenticated", token);
+      HttpResponse::Ok().body(token)
+    },
+    Entry::Vacant(_) => {
+      error!("Someone tried to authenticate with an invalid code");
+      HttpResponse::BadRequest().body("Invalid code")
+    },
+  }
 }

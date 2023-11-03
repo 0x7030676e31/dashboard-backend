@@ -1,16 +1,19 @@
+use super::user::User;
 use super::patient::Patient;
 use super::session::Session;
 use crate::AppState;
 use crate::logs::*;
 use crate::consts;
 
+use std::collections::HashMap;
 use std::{fs, io};
 use std::sync::Arc;
 
 use chrono::Utc;
+use sha2::{Sha256, Digest};
 use tokio::sync::{mpsc, RwLock};
 use tokio::time;
-use serde::{Serialize, Deserialize};
+use serde::Deserialize;
 
 const SECRETS: &str = include_str!("../../secrets.json");
 
@@ -18,31 +21,10 @@ const SECRETS: &str = include_str!("../../secrets.json");
 pub struct State {
   pub session: Vec<Session>,
   pub patient: Vec<Patient>,
-  pub users: Vec<Arc<RwLock<User>>>,
+  pub users: HashMap<String, Arc<RwLock<User>>>,
   pub secrets: Arc<Secrets>,
   pub write_tx: mpsc::Sender<()>,
-}
-
-#[derive(Debug, Clone)]
-pub struct User {
-  pub access_token: String,
-  pub expires_at: u64,
-  pub refresh_token: String,
-  pub stop_tx: mpsc::Sender<()>,
-  pub write_tx: mpsc::Sender<()>,
-  pub secrets: Arc<Secrets>,
-  pub user_info: UserInfo,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct UserInfo {
-  pub id: String,
-  pub email: Option<String>,
-  pub verified_email: Option<bool>,
-  pub name: String,
-  pub given_name: String,
-  pub picture: String,
-  pub locale: String,
+  pub auth_codes: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -57,8 +39,49 @@ pub struct GoogleRefreshResp {
   pub expires_in: u64,
 }
 
+#[async_trait::async_trait]
+pub trait ArcState {
+  fn fs_write(&self);
+  async fn new_code(&self, token: &str) -> String;
+}
+
+#[async_trait::async_trait]
+impl ArcState for AppState {
+  fn fs_write(&self) {
+    let state = self.clone();
+    tokio::spawn(async move {
+      let state = state.read().await;
+      state.write();
+    });
+  }
+
+  async fn new_code(&self, token: &str) -> String {
+    let mut state = self.write().await;
+    let code = State::generate_token();
+    state.auth_codes.insert(code.clone(), token.to_string());
+    info!("Created new auth code: {}", code);
+
+    let state = self.clone();
+    let code2 = code.clone();
+    tokio::spawn(async move {
+      time::sleep(time::Duration::from_secs(60)).await;
+      let mut state = state.write().await;
+      state.auth_codes.remove(&code2);
+      info!("Removed auth code: {}", code2);
+    });
+    
+    code
+  }
+}
+
 impl State {
-  pub fn new() -> io::Result<(Self, mpsc::Receiver<()>)> {
+  pub fn generate_token() -> String {
+    let mut hasher = Sha256::new();
+    hasher.update((i64::MAX - Utc::now().timestamp()).to_string());
+    format!("{:x}", hasher.finalize())
+  }
+
+  pub fn new(write_tx: mpsc::Sender<()>) -> io::Result<Self> {
     let sessions_dir = format!("{}/sessions", consts::PATH);
     let patients_dir = format!("{}/patients", consts::PATH);
 
@@ -71,37 +94,52 @@ impl State {
     }
 
     let secrets = serde_json::from_str(SECRETS)?;
-    let (write_tx, write_rx) = mpsc::channel(1);
 
-    Ok((State {
+    Ok(State {
       session: Session::from_dir(&sessions_dir)?,
       patient: Patient::from_dir(&patients_dir)?,
-      users: Vec::new(),
+      users: HashMap::new(),
       secrets: Arc::new(secrets),
       write_tx,
-    }, write_rx))
+      auth_codes: HashMap::new(),
+    })
   }
 
   pub fn start_write_loop(state: AppState, mut write_rx: mpsc::Receiver<()>) {
     tokio::spawn(async move {
       info!("Starting write loop...");
       loop {
-        write_rx.recv().await.unwrap();
+        if write_rx.recv().await.is_none() {
+          info!("Closing write loop...");
+          break;
+        }
+
         info!("Writing state to disk...");
+        let state = state.read().await;
+        state.write();
       }
     });
   }
 
-  pub fn add_new_user(&mut self, user: User, stop_rx: mpsc::Receiver<()>) {
+  pub fn write(&self) {
+    // dbg!("Writing state to disk...");
+  }
+
+
+  pub fn add_new_user(&mut self, user: User, stop_rx: mpsc::Receiver<()>) -> String {
     let user = Arc::new(RwLock::new(user));
-    self.users.push(user.clone());
+    let token = Self::generate_token();
+    self.users.insert(token.clone(), Arc::clone(&user));
+    self.write();
     
     tokio::spawn(async move {
       Self::start_refresh_loop(user, stop_rx).await;
     });
+
+    token
   }
 
-  pub async fn start_refresh_loop(user: Arc<RwLock<User>>, mut stop_rx: mpsc::Receiver<()>) {
+  pub async fn start_refresh_loop(user: crate::User, mut stop_rx: mpsc::Receiver<()>) {
     info!("Starting refresh loop for user {}", user.read().await.user_info.name);
     loop {
       let rw_user = user.read().await;
@@ -158,4 +196,15 @@ impl State {
     }
   }
 
+  pub async fn get_user(&self, req: &actix_web::HttpRequest) -> Result<crate::User, actix_web::Error> {
+    let auth = match req.headers().get("Authorization") {
+      Some(auth) => auth.to_str().unwrap_or("").to_string(),
+      None => return Err(actix_web::error::ErrorUnauthorized("Missing Authorization header")),
+    };
+
+    match self.users.get(&auth) {
+      Some(user) => Ok(user.clone()),
+      None => Err(actix_web::error::ErrorUnauthorized("Invalid Authorization header")),
+    }
+  }
 }
