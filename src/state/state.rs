@@ -1,4 +1,4 @@
-use super::user::User;
+use super::user::{User, RwUser};
 use super::patient::Patient;
 use super::session::Session;
 use crate::AppState;
@@ -6,25 +6,46 @@ use crate::logs::*;
 use crate::consts;
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 use std::{fs, io};
 use std::sync::Arc;
 
+use actix_web::HttpRequest;
+use actix_web_lab::sse;
 use chrono::Utc;
 use sha2::{Sha256, Digest};
 use tokio::sync::{mpsc, RwLock};
 use tokio::time;
-use serde::Deserialize;
+use serde::{Serialize, Deserialize};
+use tokio::time::interval;
+use futures::future;
 
 const SECRETS: &str = include_str!("../../secrets.json");
 
 #[derive(Debug)]
 pub struct State {
-  pub session: Vec<Session>,
-  pub patient: Vec<Patient>,
+  pub sessions: Vec<Session>,
+  pub patients: Vec<Patient>,
   pub users: HashMap<String, Arc<RwLock<User>>>,
+
+  // <Access token, SSE token>
+  pub sse_tokens: HashMap<String, String>,
+  pub sse: Vec<mpsc::Sender<sse::Event>>,
   pub secrets: Arc<Secrets>,
   pub write_tx: mpsc::Sender<()>,
+
+  // <Verification code, Access token>
   pub auth_codes: HashMap<String, String>,
+
+  // Used to identify messages
+  pub ack: AtomicU64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct RwState {
+  users: HashMap<String, RwUser>,
+  sse_tokens: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -66,8 +87,9 @@ impl ArcState for AppState {
     tokio::spawn(async move {
       time::sleep(time::Duration::from_secs(60)).await;
       let mut state = state.write().await;
-      state.auth_codes.remove(&code2);
-      info!("Removed auth code: {}", code2);
+      if let Some(_) = state.auth_codes.remove(&code2) {
+        info!("Removed auth code: {}", code2);
+      }
     });
     
     code
@@ -84,6 +106,7 @@ impl State {
   pub fn new(write_tx: mpsc::Sender<()>) -> io::Result<Self> {
     let sessions_dir = format!("{}/sessions", consts::PATH);
     let patients_dir = format!("{}/patients", consts::PATH);
+    let path = format!("{}/state.json", consts::PATH);
 
     if fs::metadata(&sessions_dir).is_err() {
       fs::create_dir_all(&sessions_dir)?;
@@ -95,14 +118,95 @@ impl State {
 
     let secrets = serde_json::from_str(SECRETS)?;
 
+    if fs::metadata(&path).is_err() {
+      info!("No state file found, creating empty state...");
+      return Ok(State {
+        sessions: Session::from_dir(&sessions_dir)?,
+        patients: Patient::from_dir(&patients_dir)?,
+        users: HashMap::new(),
+        sse_tokens: HashMap::new(),
+        sse: Vec::new(),
+        secrets: Arc::new(secrets),
+        write_tx,
+        auth_codes: HashMap::new(),
+        ack: AtomicU64::new(0),
+      });
+    }
+
+    let file = fs::read_to_string(&path)?;
+    let rwstate = serde_json::from_str::<RwState>(&file)?;
+
+    let secrets = Arc::new(secrets);
+    let mut users = HashMap::new();
+
+    for (token, user) in rwstate.users {
+      let (tx, rx) = mpsc::channel(1);
+      let write_tx = write_tx.clone();
+      
+      let user = User {
+        access_token: user.access_token,
+        expires_at: user.expires_at,
+        refresh_token: user.refresh_token,
+        user_info: crate::state::user::UserInfo {
+          id: user.id,
+          email: user.email,
+          verified_email: user.verified_email,
+          name: user.name,
+          given_name: user.given_name,
+          picture: user.picture,
+          locale: user.locale,
+        },
+        stop_tx: tx,
+        write_tx,
+        secrets: Arc::clone(&secrets),
+      };
+
+      let user = Arc::new(RwLock::new(user));
+      users.insert(token, Arc::clone(&user));
+
+      tokio::spawn(async move {
+        Self::start_refresh_loop(user, rx).await;
+      });
+    }
+    
+    info!("Loaded state from disk, found {} users", users.len());
     Ok(State {
-      session: Session::from_dir(&sessions_dir)?,
-      patient: Patient::from_dir(&patients_dir)?,
-      users: HashMap::new(),
-      secrets: Arc::new(secrets),
+      sessions: Session::from_dir(&sessions_dir)?,
+      patients: Patient::from_dir(&patients_dir)?,
+      users,
+      sse_tokens: rwstate.sse_tokens,
+      sse: Vec::new(),
+      secrets,
       write_tx,
       auth_codes: HashMap::new(),
+      ack: AtomicU64::new(0),
     })
+  }
+
+  pub fn spawn_ping_loop(state: AppState) {
+    tokio::spawn(async move {
+      info!("Starting ping loop...");
+      let mut interval = interval(Duration::from_secs(10));
+
+      loop {
+        interval.tick().await;
+        state.write().await.remove_stale_clients().await;
+      }
+    });
+  }
+
+  async fn remove_stale_clients(&mut self) {
+    let clients = self.sse.clone();
+    
+    let mut active_clients = Vec::new();
+    for client in clients {
+      let is_ok = client.send(sse::Event::Comment("ping".into())).await.is_ok();
+      if is_ok {
+        active_clients.push(client);
+      }
+    }
+
+    self.sse = active_clients;
   }
 
   pub fn start_write_loop(state: AppState, mut write_rx: mpsc::Receiver<()>) {
@@ -114,7 +218,6 @@ impl State {
           break;
         }
 
-        info!("Writing state to disk...");
         let state = state.read().await;
         state.write();
       }
@@ -122,13 +225,50 @@ impl State {
   }
 
   pub fn write(&self) {
-    // dbg!("Writing state to disk...");
+    let path = format!("{}/state.json", consts::PATH);
+    let users = self.users.clone();
+    let sse_tokens = self.sse_tokens.clone();
+
+    info!("Writing state to disk...");
+    tokio::spawn(async move {
+      let bare_users = users.values().map(|u| u.read());
+      let bare_users = future::join_all(bare_users).await;
+
+      let rwstate = RwState {
+        users: users.keys().enumerate().map(|(i, token)| (token.clone(), RwUser::from_user(&bare_users[i]))).collect(),
+        sse_tokens,
+      };
+
+      let json = serde_json::to_string(&rwstate).unwrap();
+      match fs::write(path, json) {
+        Ok(_) => {
+          info!("Successfully wrote state to disk");
+        },
+        Err(err) => {
+          error!("There was an error while writing the state to disk: {}", err);
+        },
+      };
+    });
   }
 
+  pub fn auth_token(&self, req: HttpRequest) -> Result<String, actix_web::Error> {
+    req.headers().get("Authorization").map_or(Err(actix_web::error::ErrorUnauthorized("Missing Authorization header")), |token| {
+      let token = token.to_str().map_err(|_| actix_web::error::ErrorUnauthorized("Invalid Authorization header"))?;
+      self.users.contains_key(token).then(|| token.to_string()).ok_or(actix_web::error::ErrorUnauthorized("Unauthorized"))
+    })
+  }
+
+  pub fn check_auth(&self, req: HttpRequest) -> Result<Arc<RwLock<User>>, actix_web::Error> {
+    req.headers().get("Authorization").map_or(Err(actix_web::error::ErrorUnauthorized("Missing Authorization header")), |token| {
+      let token = token.to_str().map_err(|_| actix_web::error::ErrorUnauthorized("Invalid Authorization header"))?;
+      self.users.get(token).map(|u| Arc::clone(u)).ok_or(actix_web::error::ErrorUnauthorized("Unauthorized"))
+    })
+  }
 
   pub fn add_new_user(&mut self, user: User, stop_rx: mpsc::Receiver<()>) -> String {
     let user = Arc::new(RwLock::new(user));
     let token = Self::generate_token();
+    self.sse_tokens.insert(token.clone(), State::generate_token());
     self.users.insert(token.clone(), Arc::clone(&user));
     self.write();
     
@@ -186,25 +326,60 @@ impl State {
 
       rw_user.access_token = res.access_token;
       rw_user.expires_at = res.expires_in + Utc::now().timestamp() as u64;
-      
+      info!("Refreshed token for user {}", rw_user.user_info.name);
+
       let tx = rw_user.write_tx.clone();
+      let username = rw_user.user_info.name.clone();
       tokio::spawn(async move {
-        tx.send(()).await.unwrap();
+        if let Err(err) = tx.send(()).await {
+          error!("There was an error while sending the write signal for user {}: {}", username, err);
+        }
       });
 
       drop(rw_user);
     }
   }
 
-  pub async fn get_user(&self, req: &actix_web::HttpRequest) -> Result<crate::User, actix_web::Error> {
-    let auth = match req.headers().get("Authorization") {
-      Some(auth) => auth.to_str().unwrap_or("").to_string(),
-      None => return Err(actix_web::error::ErrorUnauthorized("Missing Authorization header")),
-    };
+  fn broadcast_message(&self, event: SseEvent) -> String {
+    let ack = self.ack.fetch_add(1, Ordering::Relaxed);
+    serde_json::to_string(&BroadcastMessage { payload: event, ack }).unwrap() 
+  }
 
-    match self.users.get(&auth) {
-      Some(user) => Ok(user.clone()),
-      None => Err(actix_web::error::ErrorUnauthorized("Invalid Authorization header")),
+  pub async fn broadcast<'a>(&self, msg: SseEvent<'a>) {
+    let msg = self.broadcast_message(msg);
+    info!("Broadcasting SSE message to {} clients", self.sse.len());
+
+    let futs = self.sse.iter().map(|tx| tx.send(sse::Data::new(msg.clone()).into()));
+    let res = future::join_all(futs).await;
+    
+    for (i, res) in res.into_iter().enumerate() {
+      if let Err(err) = res {
+        error!("Couldn't send message to sse client {}: {}", i, err);
+      }
     }
   }
+}
+
+#[derive(Serialize)]
+struct BroadcastMessage<'a> {
+  #[serde(flatten)]
+  payload: SseEvent<'a>,
+  ack: u64,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", content = "payload")]
+pub enum SseEvent<'a> {
+  Ready {
+    patients: &'a Vec<Patient>,
+    sessions: &'a Vec<Session>,
+    user_mail: &'a str,
+    user_avatar: &'a str,
+  },
+  PatientAdded(&'a Patient),
+  PatientUpdated(&'a Patient),
+  PatientRemoved(&'a String),
+  SessionAdded(&'a Session),
+  SessionUpdated(&'a Session),
+  SessionRemoved(&'a String),
 }

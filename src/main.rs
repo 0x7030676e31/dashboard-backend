@@ -39,10 +39,12 @@ async fn main() -> std::io::Result<()> {
   let state = Arc::new(RwLock::new(state));
 
   State::start_write_loop(Arc::clone(&state), write_rx);
+  State::spawn_ping_loop(Arc::clone(&state));
 
   HttpServer::new(move || {
     App::new()
       .wrap(actix_cors::Cors::permissive())
+      // .wrap(actix_web::middleware::Logger::default())
       .app_data(Data::new(state.clone()))
       .service(routes::get_routes())
   })

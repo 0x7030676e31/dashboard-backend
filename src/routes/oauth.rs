@@ -102,11 +102,11 @@ pub async fn oauth(state: web::Data<AppState>, query: web::Query<Query>) -> Eith
 
   drop(appstate);
   
-  
   let mut appstate = state.write().await;
   let futures = appstate.users.values().map(|u| u.read());
-  let token = future::join_all(futures).await.iter().find_map(|u| {
-    if u.user_info.email == user.email { Some(u.access_token.clone()) } else { None }
+  let token = future::join_all(futures).await.iter().enumerate().find_map(|(i, u)| {
+    if u.user_info.email == user.email { Some(appstate.users.keys().nth(i).unwrap().to_owned()) }
+    else { None }
   });
 
   let token = match token {
@@ -125,7 +125,8 @@ pub async fn oauth(state: web::Data<AppState>, query: web::Query<Query>) -> Eith
         secrets: Arc::clone(&appstate.secrets),
       };
 
-      appstate.add_new_user(user, rx)
+      let token = appstate.add_new_user(user, rx);
+      token
     }
   };
   
@@ -153,3 +154,4 @@ pub async fn auth(state: web::Data<AppState>, code: web::Bytes) -> impl Responde
     },
   }
 }
+

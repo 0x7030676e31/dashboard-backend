@@ -1,3 +1,4 @@
+use crate::logs::*;
 use crate::consts;
 
 use std::path::Path;
@@ -8,6 +9,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Patient {
   pub uuid: String,
+  pub description: String,
+  pub age: Option<u8>,
+  pub name: String,
+  pub address: String,
+  pub profile_picture: Option<String>,
+  pub created_at: u64,
+  pub last_updated: u64,
 }
 
 impl Patient {
@@ -33,11 +41,21 @@ impl Patient {
       }
     }
 
+    info!("Loaded {} patients", patients.len());
     Ok(patients)
   }
 
   pub fn write(&self) {
-    let _path = format!("{}/{}.json", consts::PATH, self.uuid);
-    // match fs::write(path, serde_json::to_string(self).unwrap()) {
+    let path = format!("{}/patients/{}.json", consts::PATH, self.uuid);
+    if let Err(err) = fs::write(path, serde_json::to_string(self).unwrap()) {
+      error!("Couldn't write patient to file: {}", err);
+    }
+  }
+
+  pub fn delete(&self) {
+    let path = format!("{}/patients/{}.json", consts::PATH, self.uuid);
+    if let Err(err) = fs::remove_file(path) {
+      error!("Couldn't delete patient file: {}", err);
+    }
   }
 }

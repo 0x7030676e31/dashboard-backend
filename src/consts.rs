@@ -1,6 +1,6 @@
 // Storage path
 #[cfg(not(production))]
-pub const PATH: &str = concat!(env!("HOME"), "/.config/dashboard");
+pub const PATH: &str = concat!(env!("HOME"), "/.config/dashboard@2  ");
 #[cfg(production)]
 pub const PATH: &str = "./";
 

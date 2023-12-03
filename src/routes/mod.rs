@@ -1,7 +1,7 @@
 use actix_web::{Scope, web};
 
-mod patient;
 mod session;
+mod patient;
 mod oauth;
 mod sse;
 
@@ -15,4 +15,23 @@ pub fn get_routes() -> Scope {
 fn api() -> Scope {
   web::scope("/api")
     .service(oauth::auth)
+    .service(sse::get_token)
+    .service(sse::stream)
+    .service(sessions())
+    .service(patients())
+}
+
+fn sessions() -> Scope {
+  web::scope("/sessions")
+    .service(session::create_session)
+    .service(session::update_session)
+    .service(session::delete_session)
+    .service(session::stream)
+}
+
+fn patients() -> Scope {
+  web::scope("/patients")
+    .service(patient::create_patient)
+    .service(patient::update_patient)
+    .service(patient::delete_patient)
 }
