@@ -120,7 +120,6 @@ pub async fn delete_session(req: HttpRequest, state: web::Data<AppState>, sessio
   Ok(HttpResponse::Ok().body("Deleted"))
 }
 
-
 #[get("/{session}/stream")]
 pub async fn stream(req: HttpRequest, state: web::Data<AppState>, payload: web::Payload, session: web::Path<String>) -> Result<HttpResponse, Error> {
   let session = session.into_inner();
@@ -131,7 +130,7 @@ pub async fn stream(req: HttpRequest, state: web::Data<AppState>, payload: web::
     return Ok(HttpResponse::NotFound().body("Not Found"));
   }
 
-  let socket = SessionSocket::new(Arc::clone(&*state.into_inner()));
+  let socket = SessionSocket::new(Arc::clone(&*state.into_inner()), session);
   let resp = ws::start(socket, &req, payload)?;
   Ok(resp)
 }

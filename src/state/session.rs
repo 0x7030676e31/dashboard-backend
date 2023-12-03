@@ -95,17 +95,38 @@ impl Session {
   }
 }
 
+#[derive(Debug, Clone)]
 pub struct SessionSocket {
   state: AppState,
+  uuid: String,
   authorized: Arc<AtomicBool>,
   addr: Option<Arc<Addr<SessionSocket>>>,
   hb: Instant,
 }
 
+#[derive(Deserialize)]
+struct EditEmotion {
+  uuid: String,
+  id: Option<u8>,
+  kind: Option<EmotionType>,
+  aquired_age: Option<u8>,
+  aquired_person: String,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", content = "payload")]
+enum SocketMessage {
+  AddEmotion(String),
+  EditEmotion(EditEmotion),
+  RemoveEmotion(String),
+  EditDescription(String),
+}
+
 impl SessionSocket {
-  pub fn new(state: AppState) -> Self {
+  pub fn new(state: AppState, uuid: String) -> Self {
     Self {
       state,
+      uuid,
       authorized: Arc::new(AtomicBool::new(false)),
       addr: None,
       hb: Instant::now(),
@@ -123,20 +144,70 @@ impl SessionSocket {
       ctx.ping(b"hi");
     });
   }
+
+  async fn handle_messge(&self, msg: String) -> Result<(), &'static str> {
+    let msg: SocketMessage = serde_json::from_str(&msg).map_err(|_| "Couldn't parse message")?;
+    let mut state = self.state.write().await;
+    
+    match msg {
+      SocketMessage::AddEmotion(uuid) => {
+        let session = state.sessions.iter_mut().find(|session| session.uuid == self.uuid).ok_or("Session not found")?;
+        if session.emotions.iter().any(|emotion| emotion.uuid == uuid) {
+          return Err("Emotion already exists");
+        }
+
+        let emotion = Emotion {
+          uuid,
+          id: None,
+          kind: None,
+          aquired_age: None,
+          aquired_person: "".to_string(),
+          created_at: chrono::Utc::now().timestamp() as u64,
+        };
+
+        session.emotions.push(emotion.clone());
+        session.write();
+      },
+      SocketMessage::EditEmotion(edit) => {
+        let session = state.sessions.iter_mut().find(|session| session.uuid == self.uuid).ok_or("Session not found")?;
+        let emotion = session.emotions.iter_mut().find(|emotion| emotion.uuid == edit.uuid).ok_or("Emotion not found")?;
+
+        if let Some(id) = edit.id {
+          emotion.id = Some(id);
+        }
+
+        if let Some(kind) = edit.kind {
+          emotion.kind = Some(kind);
+        }
+
+        if let Some(aquired_age) = edit.aquired_age {
+          emotion.aquired_age = Some(aquired_age);
+        }
+
+        if !edit.aquired_person.is_empty() {
+          emotion.aquired_person = edit.aquired_person;
+        }
+
+        session.write();
+      },
+      _ => (),
+    };
+    Ok(())
+  }
 }
 
 impl Actor for SessionSocket {
   type Context = ws::WebsocketContext<Self>;
 
   fn started(&mut self, ctx: &mut Self::Context) {
-    println!("Socket started");
+    info!("Session socket started");
     
     self.addr = Some(Arc::new(ctx.address()));
     self.hb(ctx);
   }
 
   fn stopping(&mut self, _ctx: &mut Self::Context) -> Running {
-    println!("Socket stopping");
+    info!("Session socket stopping");
     
     Running::Stop
   }
@@ -155,27 +226,39 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for SessionSocket {
       Ok(ws::Message::Text(text)) => {
         let msg: String = text.into();
 
-        if !self.authorized.load(Ordering::Relaxed) {
-          let state = self.state.clone();
-          let authorized = self.authorized.clone();
+        if self.authorized.load(Ordering::Relaxed) {
           let addr = self.addr.clone().unwrap();
-          
-          tokio::spawn(async move {
-            let state = state.read().await;
-            if state.users.contains_key(&msg) {
-              info!("Session socket authorized");
-              
-              authorized.store(true, Ordering::Relaxed);
-              addr.do_send(WsMessage("Authorized".to_string()));
-              return;
-            }
+          let arc_state = Arc::new(self.clone());
 
-            info!("Session socket failed to authorize");
-            addr.do_send(WsMessage("Unauthorized".to_string()));
-            addr.do_send(CloseSession);
+          tokio::spawn(async move {
+            if let Err(err) = arc_state.handle_messge(msg).await {
+              addr.do_send(WsMessage(err.to_string()));
+              addr.do_send(CloseSession);
+              error!("Error sending message: {:?}", err);
+            }
           });
+          
           return;
         }
+        
+        let state = self.state.clone();
+        let authorized = self.authorized.clone();
+        let addr = self.addr.clone().unwrap();
+        
+        tokio::spawn(async move {
+          let state = state.read().await;
+          if state.users.contains_key(&msg) {
+            info!("Session socket authorized");
+            
+            authorized.store(true, Ordering::Relaxed);
+            addr.do_send(WsMessage("Authorized".to_string()));
+            return;
+          }
+
+          info!("Session socket failed to authorize");
+          addr.do_send(WsMessage("Unauthorized".to_string()));
+          addr.do_send(CloseSession);
+        });
       },
       Err(err) => {
         error!("Error handling message: {:?}", err);
