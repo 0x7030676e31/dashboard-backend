@@ -11,6 +11,9 @@ use actix_web_actors::ws;
 use actix::{Actor, StreamHandler, AsyncContext, ActorContext, Message, Handler, Addr};
 use actix::Running;
 use serde::{Deserialize, Serialize};
+use tokio::time;
+
+use super::state::SseEvent;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -54,10 +57,6 @@ pub enum TimelineEvent {
 }
 
 impl Session {
-  pub fn new() -> Self {
-    todo!()
-  }
-
   pub fn from_file<P: AsRef<Path>>(path: P) -> io::Result<Self> {
     let file = fs::read_to_string(path)?;
     let session = serde_json::from_str(&file)?;
@@ -95,15 +94,6 @@ impl Session {
   }
 }
 
-#[derive(Debug, Clone)]
-pub struct SessionSocket {
-  state: AppState,
-  uuid: String,
-  authorized: Arc<AtomicBool>,
-  addr: Option<Arc<Addr<SessionSocket>>>,
-  hb: Instant,
-}
-
 #[derive(Deserialize)]
 struct EditEmotion {
   uuid: String,
@@ -122,6 +112,18 @@ enum SocketMessage {
   EditDescription(String),
 }
 
+#[derive(Debug, Clone)]
+pub struct SessionSocket {
+  state: AppState,
+  uuid: String,
+  authorized: Arc<AtomicBool>,
+  addr: Option<Arc<Addr<SessionSocket>>>,
+  hb: Instant,
+  socket_id: u64,
+  is_patient_update_scheduled: Arc<AtomicBool>,
+  is_session_update_scheduled: Arc<AtomicBool>,
+}
+
 impl SessionSocket {
   pub fn new(state: AppState, uuid: String) -> Self {
     Self {
@@ -130,6 +132,9 @@ impl SessionSocket {
       authorized: Arc::new(AtomicBool::new(false)),
       addr: None,
       hb: Instant::now(),
+      socket_id: chrono::Utc::now().timestamp_millis() as u64,
+      is_patient_update_scheduled: Arc::new(AtomicBool::new(false)),
+      is_session_update_scheduled: Arc::new(AtomicBool::new(false)),
     }
   }
   
@@ -142,6 +147,64 @@ impl SessionSocket {
       }
 
       ctx.ping(b"hi");
+    });
+  }
+
+  fn schedule_session_update(&self) {
+    if self.is_session_update_scheduled.load(Ordering::Relaxed) {
+      return;
+    }
+
+    self.is_session_update_scheduled.store(true, Ordering::Relaxed);
+    let arc_state = Arc::new(self.clone());
+    let state = self.state.clone();
+    
+    tokio::spawn(async move {
+      time::sleep(Duration::from_secs(5)).await;
+      let state = state.read().await;
+      let session = match state.sessions.iter().find(|session| session.uuid == arc_state.uuid) {
+        Some(session) => session,
+        None => {
+          error!("Couldn't find session to update");
+          return;
+        }
+      };
+
+      state.broadcast_socket(SseEvent::SessionUpdated(&session), arc_state.socket_id).await;
+      arc_state.is_session_update_scheduled.store(false, Ordering::Relaxed);
+    });
+  }
+
+  fn schedule_patient_update(&self) {
+    if self.is_patient_update_scheduled.load(Ordering::Relaxed) {
+      return;
+    }
+
+    self.is_patient_update_scheduled.store(true, Ordering::Relaxed);
+    let arc_state = Arc::new(self.clone());
+    let state = self.state.clone();
+    
+    tokio::spawn(async move {
+      time::sleep(Duration::from_secs(5)).await;
+      let state = state.read().await;
+      let session = match state.sessions.iter().find(|session| session.uuid == arc_state.uuid) {
+        Some(session) => session,
+        None => {
+          error!("Couldn't find session to update");
+          return;
+        }
+      };
+
+      let patient = match state.patients.iter().find(|patient| patient.uuid == session.patient_uuid) {
+        Some(patient) => patient,
+        None => {
+          error!("Couldn't find patient to update");
+          return;
+        }
+      };
+
+      state.broadcast_socket(SseEvent::PatientUpdated(&patient), arc_state.socket_id).await;
+      arc_state.is_patient_update_scheduled.store(false, Ordering::Relaxed);
     });
   }
 
@@ -166,6 +229,7 @@ impl SessionSocket {
         };
 
         session.emotions.push(emotion.clone());
+        self.schedule_session_update();
         session.write();
       },
       SocketMessage::EditEmotion(edit) => {
@@ -188,9 +252,22 @@ impl SessionSocket {
           emotion.aquired_person = edit.aquired_person;
         }
 
+        self.schedule_session_update();
         session.write();
       },
-      _ => (),
+      SocketMessage::RemoveEmotion(uuid) => {
+        let session = state.sessions.iter_mut().find(|session| session.uuid == self.uuid).ok_or("Session not found")?;
+        session.emotions.retain(|emotion| emotion.uuid != uuid);
+        self.schedule_session_update();
+        session.write();
+      },
+      SocketMessage::EditDescription(description) => {
+        let patient_uuid = state.sessions.iter().find(|session| session.uuid == self.uuid).ok_or("Session not found")?.patient_uuid.clone();
+        let patient = state.patients.iter_mut().find(|patient| patient.uuid == patient_uuid).ok_or("Patient not found")?;
+        patient.description = description;
+        self.schedule_patient_update();
+        patient.write();
+      },
     };
     Ok(())
   }
@@ -245,13 +322,14 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for SessionSocket {
         let authorized = self.authorized.clone();
         let addr = self.addr.clone().unwrap();
         
+        let id = self.socket_id;
         tokio::spawn(async move {
           let state = state.read().await;
           if state.users.contains_key(&msg) {
             info!("Session socket authorized");
             
             authorized.store(true, Ordering::Relaxed);
-            addr.do_send(WsMessage("Authorized".to_string()));
+            addr.do_send(WsMessage(format!("Authorized: {}", id)));
             return;
           }
 
@@ -288,7 +366,7 @@ pub struct CloseSession;
 impl Handler<CloseSession> for SessionSocket {
   type Result = ();
 
-  fn handle(&mut self, _msg: CloseSession, ctx: &mut Self::Context) {
+  fn handle(&mut self, _: CloseSession, ctx: &mut Self::Context) {
     ctx.stop();
   }
 }

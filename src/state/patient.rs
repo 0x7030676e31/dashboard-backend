@@ -19,10 +19,6 @@ pub struct Patient {
 }
 
 impl Patient {
-  pub fn new() -> Self {
-    todo!()
-  }
-
   pub fn from_file<P: AsRef<Path>>(path: P) -> io::Result<Self> {
     let file = fs::read_to_string(path)?;
     let patient = serde_json::from_str(&file)?;

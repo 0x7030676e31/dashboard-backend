@@ -340,13 +340,9 @@ impl State {
     }
   }
 
-  fn broadcast_message(&self, event: SseEvent) -> String {
+  async fn broadcast_message<'a>(&self, event: SseEvent<'a>, socket_ack: Option<u64>) {
     let ack = self.ack.fetch_add(1, Ordering::Relaxed);
-    serde_json::to_string(&BroadcastMessage { payload: event, ack }).unwrap() 
-  }
-
-  pub async fn broadcast<'a>(&self, msg: SseEvent<'a>) {
-    let msg = self.broadcast_message(msg);
+    let msg = serde_json::to_string(&BroadcastMessage { payload: event, ack, socket_ack }).unwrap();
     info!("Broadcasting SSE message to {} clients", self.sse.len());
 
     let futs = self.sse.iter().map(|tx| tx.send(sse::Data::new(msg.clone()).into()));
@@ -358,12 +354,21 @@ impl State {
       }
     }
   }
+
+  pub async fn broadcast<'a>(&self, msg: SseEvent<'a>) {
+    self.broadcast_message(msg, None).await;
+  }
+
+  pub async fn broadcast_socket<'a>(&self, msg: SseEvent<'a>, socket_ack: u64) {
+    self.broadcast_message(msg, Some(socket_ack)).await;
+  }
 }
 
 #[derive(Serialize)]
 struct BroadcastMessage<'a> {
   #[serde(flatten)]
   payload: SseEvent<'a>,
+  socket_ack: Option<u64>,
   ack: u64,
 }
 
