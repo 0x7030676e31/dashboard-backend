@@ -10,8 +10,17 @@ use crate::logs::*;
 use actix_web::{Responder, web, Either, HttpResponse, HttpRequest};
 use chrono::Utc;
 use futures::future;
-use reqwest::Client;
+use reqwest::ClientBuilder;
 use tokio::sync::mpsc;
+
+// fn cert() -> &'static Certificate {
+//   static CERT: OnceLock<Certificate> = OnceLock::new();
+//   CERT.get_or_init(|| {
+//     let path = crate::macros::path();
+//     let cert = fs::read(format!("{}com/certificate.pem", path)).unwrap();
+//     Certificate::from_pem(&cert[..]).unwrap()
+//   })
+// }
 
 #[actix_web::get("/authorize")]
 pub async fn index(req: HttpRequest, state: web::Data<AppState>, env: web::Data<EnvVars>) -> impl Responder {
@@ -21,7 +30,6 @@ pub async fn index(req: HttpRequest, state: web::Data<AppState>, env: web::Data<
     format!("http://localhost:{}", env.inner_port)
   };
   
-  println!("{}", origin);
   let appstate = state.read().await;
   let url = format!("https://accounts.google.com/o/oauth2/v2/auth?scope={}&access_type=offline&response_type=code&redirect_uri={}&client_id={}&prompt=consent",
     consts::SCOPES.join(" "),
@@ -67,19 +75,23 @@ pub async fn oauth(req: HttpRequest, state: web::Data<AppState>, env: web::Data<
 
   let appstate = state.read().await;
 
-  let client = Client::new();
+  let client = ClientBuilder::new()
+    .danger_accept_invalid_certs(true)
+    .build()
+    .unwrap();
+
   let res = client
-  .post("https://oauth2.googleapis.com/token")
-  .header("Content-Type", "application/x-www-form-urlencoded")
-  .form(&[
-    ("code", &code),
-    ("client_id", &appstate.secrets.client_id),
-    ("client_secret", &appstate.secrets.client_secret),
-    ("redirect_uri", &format!("{}/oauth", origin)),
-    ("grant_type", &"authorization_code".into()),
-  ])
-  .send()
-  .await;
+    .post("https://oauth2.googleapis.com/token")
+    .header("Content-Type", "application/x-www-form-urlencoded")
+    .form(&[
+      ("code", &code),
+      ("client_id", &appstate.secrets.client_id),
+      ("client_secret", &appstate.secrets.client_secret),
+      ("redirect_uri", &format!("{}/oauth", origin)),
+      ("grant_type", &"authorization_code".into()),
+    ])
+    .send()
+    .await;
 
   let res = match res {
     Ok(res) => res,
@@ -107,7 +119,7 @@ pub async fn oauth(req: HttpRequest, state: web::Data<AppState>, env: web::Data<
   };
 
   if env.users.iter().any(|mail| mail == &user.email) {
-    warning!("Someone tried to authorize with an unauthorized email");
+    warning!("Someone tried to authorize with an unauthorized email: {}", user.email);
     return Either::Left("Error: unauthorized email".into());
   }
 

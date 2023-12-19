@@ -40,7 +40,7 @@ async fn main() -> std::io::Result<()> {
   let inner_port = env::var("INNER_PORT").map_or(2137, |port| port.parse().unwrap_or(2137));
   let dev_port = env::var("DEV_PORT").map_or(5173, |port| port.parse().unwrap_or(5173));
 
-  let path = if is_production { "/".into() } else { env::var("FS").unwrap_or("/".into()) };
+  let path = if is_production { "/root/".into() } else { env::var("FS").unwrap_or("/root/".into()) };
 
   let env_vars = EnvVars {
     is_production,
@@ -49,6 +49,7 @@ async fn main() -> std::io::Result<()> {
     users,
   };
 
+  macros::first(is_production);
   env::set_var("RUST_LOG", "INFO");
   env_logger::init();
 
