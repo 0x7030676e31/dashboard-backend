@@ -1,7 +1,6 @@
 use crate::AppState;
 use crate::logs::*;
 
-use std::env;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Instant, Duration};
@@ -75,14 +74,14 @@ impl Session {
   }
 
   pub fn write(&self) {
-    let path = format!("{}sessions/{}.json", env::var("FS_PATH").unwrap_or("~".into()), self.uuid);
+    let path = format!("{}sessions/{}.json", fspath!(), self.uuid);
     if let Err(err) = fs::write(path, serde_json::to_string(self).unwrap()) {
       error!("Couldn't write session to file: {}", err);
     }
   }
 
   pub fn delete(&self) {
-    let path = format!("{}sessions/{}.json", env::var("FS_PATH").unwrap_or("~".into()), self.uuid);
+    let path = format!("{}sessions/{}.json", fspath!(), self.uuid);
     if let Err(err) = fs::remove_file(path) {
       error!("Couldn't delete session file: {}", err);
     }

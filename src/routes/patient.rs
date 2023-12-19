@@ -108,7 +108,14 @@ pub async fn delete_patient(req: HttpRequest, state: web::Data<AppState>, uuid: 
     None => return Ok(HttpResponse::NotFound().body("Patient not found")),
   };
 
-  state.sessions.retain(|session| session.patient_uuid != uuid);
+  state.sessions.retain(|session| {
+    let should_retain = session.patient_uuid != uuid;
+    if !should_retain {
+      session.delete();
+    }
+
+    should_retain
+  });
 
   patient.delete();
   state.broadcast(SseEvent::PatientRemoved(&uuid)).await;

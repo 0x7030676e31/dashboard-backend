@@ -1,5 +1,6 @@
 use std::sync::{OnceLock, Mutex};
 use std::collections::VecDeque;
+use std::iter::once;
 use std::env;
 use std::fs;
 
@@ -16,7 +17,7 @@ fn lines() -> &'static Mutex<VecDeque<String>> {
   LINES.get_or_init(|| {
     let path = format!("{}logs.txt", path());
     match fs::read_to_string(path.as_str()) {
-      Ok(s) => Mutex::new(s.split('\n').map(|s| s.to_owned()).collect::<VecDeque<_>>()),
+      Ok(s) => Mutex::new(s.trim().split('\n').map(|s| s.to_owned()).collect::<VecDeque<_>>()),
       Err(_) => Mutex::new(VecDeque::new()),
     }
   })
@@ -25,7 +26,7 @@ fn lines() -> &'static Mutex<VecDeque<String>> {
 const SIZE: usize = 1024;
 pub fn write(level: impl AsRef<str>, source_file: impl AsRef<str>, line: impl AsRef<str>) {
   let date = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
-  let line = format!("[{} {}] {: <25} {}", level.as_ref(), date, &source_file.as_ref()[4..], line.as_ref());
+  let line = format!("[{: <7} {}] {: <25} {}", level.as_ref(), date, &source_file.as_ref()[4..], line.as_ref());
   let path = format!("{}logs.txt", path());
 
   let mut lines = lines().lock().unwrap();
@@ -35,7 +36,7 @@ pub fn write(level: impl AsRef<str>, source_file: impl AsRef<str>, line: impl As
     lines.pop_front();
   }
 
-  fs::write(path.as_str(), lines.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n")).unwrap();
+  fs::write(path.as_str(), lines.iter().chain(once(&"".into())).map(|s| s.as_str()).collect::<Vec<_>>().join("\n")).unwrap();
 }
 
 pub fn first(is_prod: bool) {
@@ -60,17 +61,23 @@ pub fn first(is_prod: bool) {
 
 #[allow(clippy::module_inception)]
 pub mod macros {
+  macro_rules! fspath {
+    () => {
+      crate::macros::path()
+    };
+  }
+
   macro_rules! info {
     ($($arg:tt)*) => {
       log::info!($($arg)*);
-      crate::macros::write("INFO  ", file!(), format!($($arg)*));
+      crate::macros::write("INFO", file!(), format!($($arg)*));
     }
   }
 
   macro_rules! warning {
     ($($arg:tt)*) => {
       log::warn!($($arg)*);
-      crate::macros::write("WARN  ", file!(), format!($($arg)*));
+      crate::macros::write("WARN", file!(), format!($($arg)*));
     }
   }
 
@@ -81,5 +88,5 @@ pub mod macros {
     }
   }
 
-  pub(crate) use { info, warning, error };
+  pub(crate) use { fspath, info, warning, error };
 }

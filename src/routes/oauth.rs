@@ -118,7 +118,7 @@ pub async fn oauth(req: HttpRequest, state: web::Data<AppState>, env: web::Data<
     Err(err) => return Either::Left(format!("Error: {}", err)),
   };
 
-  if env.users.iter().any(|mail| mail == &user.email) {
+  if env.users.iter().all(|mail| mail != &user.email) {
     warning!("Someone tried to authorize with an unauthorized email: {}", user.email);
     return Either::Left("Error: unauthorized email".into());
   }

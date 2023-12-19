@@ -9,6 +9,7 @@ use actix_web::{HttpServer, App, web, Responder};
 use actix_web::web::Data;
 use tokio::sync::{RwLock, mpsc};
 use include_dir::{include_dir, Dir};
+use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 
 mod state;
 mod routes;
@@ -54,7 +55,7 @@ async fn main() -> std::io::Result<()> {
   env_logger::init();
 
   let (write_tx, write_rx) = mpsc::channel(1);
-  let state = State::new(write_tx, path)?;
+  let state = State::new(write_tx, path.clone())?;
   let state = Arc::new(RwLock::new(state));
   
   State::start_write_loop(Arc::clone(&state), write_rx);
@@ -62,7 +63,7 @@ async fn main() -> std::io::Result<()> {
   
   logs::info!("Starting server on inner port {}...", inner_port);
 
-  HttpServer::new(move || {
+  let server = HttpServer::new(move || {
     App::new()
     .wrap(actix_cors::Cors::permissive())
       .app_data(Data::new(state.clone()))
@@ -71,10 +72,26 @@ async fn main() -> std::io::Result<()> {
       .route("/", web::get().to(index))
       .default_service(web::get().to(index))
       .service(routes::get_routes())
-  })
-  .bind(("0.0.0.0", inner_port))?
-  .run()
-  .await
+  });
+
+  if is_production {
+    let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
+    builder
+      .set_private_key_file(format!("{}com/private.pem", path), SslFiletype::PEM)
+      .unwrap();
+    
+    builder.set_certificate_chain_file(format!("{}com/certificate.pem", path)).unwrap();
+    server
+      .bind_openssl(format!("0.0.0.0:{}", inner_port), builder)?
+      .run()
+      .await
+  } else {
+    server
+      .bind(("0.0.0.0", inner_port))?
+      .run()
+      .await
+  }
+
 }
 
 async fn asset(path: web::Path<String>) -> impl Responder {
