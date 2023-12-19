@@ -1,5 +1,7 @@
-use crate::{logs::*, AppState, consts};
+use crate::AppState;
+use crate::logs::*;
 
+use std::env;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Instant, Duration};
@@ -35,17 +37,10 @@ pub struct Session {
 pub struct Emotion {
   pub uuid: String,
   pub id: Option<u8>,
-  pub kind: Option<EmotionType>,
+  pub kind: Option<u8>,
   pub aquired_age: Option<u8>,
   pub aquired_person: String,
   pub created_at: u64,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub enum EmotionType {
-  Acquired,
-  Inherited,
-  Owned,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -80,25 +75,25 @@ impl Session {
   }
 
   pub fn write(&self) {
-    let path = format!("{}/sessions/{}.json", consts::PATH, self.uuid);
+    let path = format!("{}sessions/{}.json", env::var("FS_PATH").unwrap_or("~".into()), self.uuid);
     if let Err(err) = fs::write(path, serde_json::to_string(self).unwrap()) {
       error!("Couldn't write session to file: {}", err);
     }
   }
 
   pub fn delete(&self) {
-    let path = format!("{}/sessions/{}.json", consts::PATH, self.uuid);
+    let path = format!("{}sessions/{}.json", env::var("FS_PATH").unwrap_or("~".into()), self.uuid);
     if let Err(err) = fs::remove_file(path) {
       error!("Couldn't delete session file: {}", err);
     }
   }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct EditEmotion {
   uuid: String,
   id: Option<u8>,
-  kind: Option<EmotionType>,
+  kind: Option<u8>,
   aquired_age: Option<u8>,
   aquired_person: String,
 }
@@ -141,7 +136,7 @@ impl SessionSocket {
   fn hb(&self, ctx: &mut ws::WebsocketContext<Self>) {
     ctx.run_interval(HEARTBEAT_INTERVAL, |act, ctx| {
       if Instant::now().duration_since(act.hb) > CLIENT_TIMEOUT {
-        println!("Disconnecting failed heartbeat");
+        info!("Disconnecting failed heartbeat");
         ctx.stop();
         return;
       }

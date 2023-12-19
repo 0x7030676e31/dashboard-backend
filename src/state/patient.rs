@@ -1,6 +1,6 @@
 use crate::logs::*;
-use crate::consts;
 
+use std::env;
 use std::path::Path;
 use std::{fs, io};
 
@@ -42,14 +42,14 @@ impl Patient {
   }
 
   pub fn write(&self) {
-    let path = format!("{}/patients/{}.json", consts::PATH, self.uuid);
+    let path = format!("{}patients/{}.json", env::var("FS_PATH").unwrap_or("~".into()), self.uuid);
     if let Err(err) = fs::write(path, serde_json::to_string(self).unwrap()) {
       error!("Couldn't write patient to file: {}", err);
     }
   }
 
   pub fn delete(&self) {
-    let path = format!("{}/patients/{}.json", consts::PATH, self.uuid);
+    let path = format!("{}patients/{}.json", env::var("FS_PATH").unwrap_or("~".into()), self.uuid);
     if let Err(err) = fs::remove_file(path) {
       error!("Couldn't delete patient file: {}", err);
     }

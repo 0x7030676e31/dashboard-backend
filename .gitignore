@@ -1,1 +1,7 @@
 /target
+/dist
+.env
+.env.prod
+build.sh
+nginx
+.VSCodeCounter

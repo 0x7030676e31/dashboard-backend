@@ -3,22 +3,29 @@ use std::sync::Arc;
 
 use crate::state::state::ArcState;
 use crate::state::user::{UserInfo, User};
-use crate::AppState;
+use crate::{AppState, EnvVars};
 use crate::consts;
 use crate::logs::*;
 
-use actix_web::{Responder, web, Either, HttpResponse};
+use actix_web::{Responder, web, Either, HttpResponse, HttpRequest};
 use chrono::Utc;
 use futures::future;
 use reqwest::Client;
 use tokio::sync::mpsc;
 
 #[actix_web::get("/authorize")]
-pub async fn index(state: web::Data<AppState>) -> impl Responder {
+pub async fn index(req: HttpRequest, state: web::Data<AppState>, env: web::Data<EnvVars>) -> impl Responder {
+  let origin = if env.is_production {
+    format!("https://{}", req.connection_info().host())
+  } else {
+    format!("http://localhost:{}", env.inner_port)
+  };
+  
+  println!("{}", origin);
   let appstate = state.read().await;
   let url = format!("https://accounts.google.com/o/oauth2/v2/auth?scope={}&access_type=offline&response_type=code&redirect_uri={}&client_id={}&prompt=consent",
     consts::SCOPES.join(" "),
-    format!("{}/oauth", crate::get_url()),
+    format!("{}/oauth", origin),
     appstate.secrets.client_id
   );
 
@@ -39,9 +46,14 @@ pub struct GoogleResp {
   refresh_token: String,
 }
 
-// Todo: respond with index.html
 #[actix_web::get("/oauth")]
-pub async fn oauth(state: web::Data<AppState>, query: web::Query<Query>) -> Either<String, web::Redirect> {
+pub async fn oauth(req: HttpRequest, state: web::Data<AppState>, env: web::Data<EnvVars>, query: web::Query<Query>) -> Either<String, web::Redirect> {
+  let origin = if env.is_production {
+    format!("https://{}", req.connection_info().host())
+  } else {
+    format!("http://localhost:{}", env.inner_port)
+  };
+
   let (code, scopes) = match query.into_inner() {
     Query::Success { code, scope } => (code, scope),
     Query::Error { error } => return Either::Left(format!("Error: {}", error)),
@@ -63,7 +75,7 @@ pub async fn oauth(state: web::Data<AppState>, query: web::Query<Query>) -> Eith
     ("code", &code),
     ("client_id", &appstate.secrets.client_id),
     ("client_secret", &appstate.secrets.client_secret),
-    ("redirect_uri", &format!("{}/oauth", crate::get_url())),
+    ("redirect_uri", &format!("{}/oauth", origin)),
     ("grant_type", &"authorization_code".into()),
   ])
   .send()
@@ -73,7 +85,6 @@ pub async fn oauth(state: web::Data<AppState>, query: web::Query<Query>) -> Eith
     Ok(res) => res,
     Err(err) => return Either::Left(format!("Error: {}", err)),
   };
-
 
   let res = match res.json::<GoogleResp>().await {
     Ok(res) => res,
@@ -95,7 +106,7 @@ pub async fn oauth(state: web::Data<AppState>, query: web::Query<Query>) -> Eith
     Err(err) => return Either::Left(format!("Error: {}", err)),
   };
 
-  if consts::USERS.iter().any(|mail| mail == &user.email) {
+  if env.users.iter().any(|mail| mail == &user.email) {
     warning!("Someone tried to authorize with an unauthorized email");
     return Either::Left("Error: unauthorized email".into());
   }
@@ -133,7 +144,8 @@ pub async fn oauth(state: web::Data<AppState>, query: web::Query<Query>) -> Eith
   drop(appstate);
   let code = state.new_code(&token).await;
 
-  Either::Right(web::Redirect::to(format!("{}/dashboard?code={}", consts::URL, code)))
+  let origin = if env.is_production { origin } else { format!("http://localhost:{}", env.dev_port) };
+  Either::Right(web::Redirect::to(format!("{}/dashboard?code={}", origin, code)))
 }
 
 #[actix_web::post("/auth")]

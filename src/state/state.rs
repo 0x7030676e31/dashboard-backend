@@ -3,7 +3,6 @@ use super::patient::Patient;
 use super::session::Session;
 use crate::AppState;
 use crate::logs::*;
-use crate::consts;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -28,6 +27,7 @@ pub struct State {
   pub sessions: Vec<Session>,
   pub patients: Vec<Patient>,
   pub users: HashMap<String, Arc<RwLock<User>>>,
+  pub path: String,
 
   // <Access token, SSE token>
   pub sse_tokens: HashMap<String, String>,
@@ -103,10 +103,10 @@ impl State {
     format!("{:x}", hasher.finalize())
   }
 
-  pub fn new(write_tx: mpsc::Sender<()>) -> io::Result<Self> {
-    let sessions_dir = format!("{}/sessions", consts::PATH);
-    let patients_dir = format!("{}/patients", consts::PATH);
-    let path = format!("{}/state.json", consts::PATH);
+  pub fn new(write_tx: mpsc::Sender<()>, file_path: String) -> io::Result<Self> {
+    let sessions_dir = format!("{}sessions", file_path);
+    let patients_dir = format!("{}patients", file_path);
+    let path = format!("{}state.json", file_path);
 
     if fs::metadata(&sessions_dir).is_err() {
       fs::create_dir_all(&sessions_dir)?;
@@ -117,13 +117,13 @@ impl State {
     }
 
     let secrets = serde_json::from_str(SECRETS)?;
-
     if fs::metadata(&path).is_err() {
       info!("No state file found, creating empty state...");
       return Ok(State {
         sessions: Session::from_dir(&sessions_dir)?,
         patients: Patient::from_dir(&patients_dir)?,
         users: HashMap::new(),
+        path: file_path,
         sse_tokens: HashMap::new(),
         sse: Vec::new(),
         secrets: Arc::new(secrets),
@@ -174,6 +174,7 @@ impl State {
       sessions: Session::from_dir(&sessions_dir)?,
       patients: Patient::from_dir(&patients_dir)?,
       users,
+      path: file_path,
       sse_tokens: rwstate.sse_tokens,
       sse: Vec::new(),
       secrets,
@@ -225,7 +226,7 @@ impl State {
   }
 
   pub fn write(&self) {
-    let path = format!("{}/state.json", consts::PATH);
+    let path = format!("{}state.json", self.path);
     let users = self.users.clone();
     let sse_tokens = self.sse_tokens.clone();
 
