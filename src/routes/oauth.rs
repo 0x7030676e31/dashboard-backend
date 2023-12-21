@@ -25,8 +25,8 @@ use tokio::sync::mpsc;
 #[actix_web::get("/authorize")]
 pub async fn index(req: HttpRequest, state: web::Data<AppState>, env: web::Data<EnvVars>) -> impl Responder {
   let origin = if env.is_production {
-    let origin = format!("https://{}", req.connection_info().host());
-    if origin.starts_with("www.") { origin[4..].to_owned() } else { origin }
+    let origin = req.connection_info().host().to_owned();
+    format!("https://{}", if origin.starts_with("www.") { &origin[4..] } else { &origin })
   } else {
     format!("http://localhost:{}", env.inner_port)
   };
@@ -58,8 +58,8 @@ pub struct GoogleResp {
 #[actix_web::get("/oauth")]
 pub async fn oauth(req: HttpRequest, state: web::Data<AppState>, env: web::Data<EnvVars>, query: web::Query<Query>) -> Either<String, web::Redirect> {
   let origin = if env.is_production {
-    let origin = format!("https://{}", req.connection_info().host());
-    if origin.starts_with("www.") { origin[4..].to_owned() } else { origin }
+    let origin = req.connection_info().host().to_owned();
+    format!("https://{}", if origin.starts_with("www.") { &origin[4..] } else { &origin })
   } else {
     format!("http://localhost:{}", env.inner_port)
   };
