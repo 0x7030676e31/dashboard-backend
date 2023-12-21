@@ -1,6 +1,5 @@
 use crate::logs::*;
 
-use std::env;
 use std::path::Path;
 use std::{fs, io};
 

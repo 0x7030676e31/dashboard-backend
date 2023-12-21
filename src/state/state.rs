@@ -13,6 +13,7 @@ use std::sync::Arc;
 use actix_web::HttpRequest;
 use actix_web_lab::sse;
 use chrono::Utc;
+use reqwest::ClientBuilder;
 use sha2::{Sha256, Digest};
 use tokio::sync::{mpsc, RwLock};
 use tokio::time;
@@ -296,7 +297,11 @@ impl State {
       }
 
       let mut rw_user = user.write().await;
-      let client = reqwest::Client::new();
+      
+      let client = ClientBuilder::new()
+        .danger_accept_invalid_certs(true)
+        .build()
+        .unwrap();
       let res = client
         .post("https://oauth2.googleapis.com/token")
         .header("Content-Type", "application/x-www-form-urlencoded")
