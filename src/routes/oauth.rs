@@ -13,15 +13,6 @@ use futures::future;
 use reqwest::ClientBuilder;
 use tokio::sync::mpsc;
 
-// fn cert() -> &'static Certificate {
-//   static CERT: OnceLock<Certificate> = OnceLock::new();
-//   CERT.get_or_init(|| {
-//     let path = crate::macros::path();
-//     let cert = fs::read(format!("{}com/certificate.pem", path)).unwrap();
-//     Certificate::from_pem(&cert[..]).unwrap()
-//   })
-// }
-
 #[actix_web::get("/authorize")]
 pub async fn index(req: HttpRequest, state: web::Data<AppState>, env: web::Data<EnvVars>) -> impl Responder {
   let origin = if env.is_production {
