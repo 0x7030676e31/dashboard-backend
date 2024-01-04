@@ -32,6 +32,18 @@ pub struct Session {
   pub last_updated: u64,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+struct FsSession {
+  patient_uuid: String,
+  start: u64,
+  end: u64,
+  paid: f32,
+  emotions: Vec<Emotion>,
+  timeline: HashMap<u64, TimelineEvent>,
+  created_at: u64,
+  last_updated: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Emotion {
   pub uuid: String,
@@ -52,8 +64,20 @@ pub enum TimelineEvent {
 
 impl Session {
   pub fn from_file<P: AsRef<Path>>(path: P) -> io::Result<Self> {
-    let file = fs::read_to_string(path)?;
-    let session = serde_json::from_str(&file)?;
+    let file = fs::read_to_string(path.as_ref())?;
+    let fs_session: FsSession = serde_json::from_str(&file)?;
+    let session = Session {
+      uuid: path.as_ref().file_stem().unwrap().to_str().unwrap().to_string(),
+      patient_uuid: fs_session.patient_uuid,
+      start: fs_session.start,
+      end: fs_session.end,
+      paid: fs_session.paid,
+      emotions: fs_session.emotions,
+      timeline: fs_session.timeline,
+      created_at: fs_session.created_at,
+      last_updated: fs_session.last_updated,
+    };
+    
     Ok(session)
   }
 
@@ -75,7 +99,18 @@ impl Session {
 
   pub fn write(&self) {
     let path = format!("{}sessions/{}.json", fspath!(), self.uuid);
-    if let Err(err) = fs::write(path, serde_json::to_string(self).unwrap()) {
+    let fs_session = FsSession {
+      patient_uuid: self.patient_uuid.clone(),
+      start: self.start,
+      end: self.end,
+      paid: self.paid,
+      emotions: self.emotions.clone(),
+      timeline: self.timeline.clone(),
+      created_at: self.created_at,
+      last_updated: self.last_updated,
+    };
+
+    if let Err(err) = fs::write(path, serde_json::to_string(&fs_session).unwrap()) {
       error!("Couldn't write session to file: {}", err);
     }
   }
@@ -101,6 +136,7 @@ struct EditEmotion {
 #[serde(tag = "type", content = "payload")]
 enum SocketMessage {
   AddEmotion(String),
+  AddEmotionPrepend(String),
   EditEmotion(EditEmotion),
   RemoveEmotion(String),
   EditDescription(String),
@@ -223,6 +259,25 @@ impl SessionSocket {
         };
 
         session.emotions.push(emotion.clone());
+        self.schedule_session_update();
+        session.write();
+      },
+      SocketMessage::AddEmotionPrepend(uuid) => {
+        let session = state.sessions.iter_mut().find(|session| session.uuid == self.uuid).ok_or("Session not found")?;
+        if session.emotions.iter().any(|emotion| emotion.uuid == uuid) {
+          return Err("Emotion already exists");
+        }
+
+        let emotion = Emotion {
+          uuid,
+          id: None,
+          kind: None,
+          aquired_age: None,
+          aquired_person: "".to_string(),
+          created_at: chrono::Utc::now().timestamp() as u64,
+        };
+
+        session.emotions.insert(0, emotion.clone());
         self.schedule_session_update();
         session.write();
       },

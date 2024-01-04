@@ -11,10 +11,24 @@ pub struct User {
   pub expires_at: u64,
   pub refresh_token: String,
   pub user_info: UserInfo,
+  pub settings: Settings,
 
   pub stop_tx: mpsc::Sender<()>,
   pub write_tx: mpsc::Sender<()>,
   pub secrets: Arc<Secrets>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Settings {
+  pub google_calendar_enabled: bool,
+}
+
+impl Default for Settings {
+  fn default() -> Self {
+    Settings {
+      google_calendar_enabled: false,
+    }
+  }
 }
 
 #[derive(Debug, Clone, Deserialize)]

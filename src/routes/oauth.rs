@@ -134,6 +134,7 @@ pub async fn oauth(req: HttpRequest, state: web::Data<AppState>, env: web::Data<
       let user = User {
         access_token: res.access_token,
         user_info: user,
+        settings: Default::default(),
         expires_at: res.expires_in + Utc::now().timestamp() as u64,
         refresh_token: res.refresh_token,
         stop_tx: tx,

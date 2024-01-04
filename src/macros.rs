@@ -8,7 +8,10 @@ pub fn path() -> &'static String {
   static PATH: OnceLock<String> = OnceLock::new();
   PATH.get_or_init(|| {
     let is_prod = env::var("PRODUCTION").map_or(false, |production| production == "true");
-    if is_prod { "/root/".into() } else { env::var("FS").unwrap_or("/root/".into()) }
+    let path = if is_prod { "/root/".into() } else { env::var("FS").unwrap_or("/root/".into()) };
+
+    fs::create_dir_all(&path).unwrap();
+    path
   })
 }
 

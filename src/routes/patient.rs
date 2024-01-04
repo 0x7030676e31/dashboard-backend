@@ -3,8 +3,7 @@ use crate::state::patient;
 use crate::AppState;
 use crate::logs::*;
 
-use actix_web::delete;
-use actix_web::{post, patch, web, HttpResponse, HttpRequest};
+use actix_web::{delete, post, patch, web, HttpResponse, HttpRequest};
 use serde::Deserialize;
 use uuid::Uuid;
 

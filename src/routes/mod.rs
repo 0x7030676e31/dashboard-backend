@@ -4,6 +4,7 @@ mod session;
 mod patient;
 mod oauth;
 mod sse;
+mod settings;
 
 pub fn get_routes() -> Scope {
   web::scope("")
@@ -19,6 +20,8 @@ fn api() -> Scope {
     .service(sse::stream)
     .service(sessions())
     .service(patients())
+    .service(settings::index)
+    .service(settings::google_calendar_resync)
 }
 
 fn sessions() -> Scope {

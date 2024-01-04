@@ -1,4 +1,4 @@
-use super::user::{User, RwUser};
+use super::user::{User, RwUser, Settings};
 use super::patient::Patient;
 use super::session::Session;
 use crate::AppState;
@@ -148,6 +148,7 @@ impl State {
         access_token: user.access_token,
         expires_at: user.expires_at,
         refresh_token: user.refresh_token,
+        settings: Default::default(),
         user_info: crate::state::user::UserInfo {
           id: user.id,
           email: user.email,
@@ -386,6 +387,7 @@ pub enum SseEvent<'a> {
     sessions: &'a Vec<Session>,
     user_mail: &'a str,
     user_avatar: &'a str,
+    settings: &'a Settings,
   },
   PatientAdded(&'a Patient),
   PatientUpdated(&'a Patient),
