@@ -148,7 +148,7 @@ impl State {
         access_token: user.access_token,
         expires_at: user.expires_at,
         refresh_token: user.refresh_token,
-        settings: Default::default(),
+        settings: user.settings,
         user_info: crate::state::user::UserInfo {
           id: user.id,
           email: user.email,
@@ -333,7 +333,7 @@ impl State {
 
       rw_user.access_token = res.access_token;
       rw_user.expires_at = res.expires_in + Utc::now().timestamp() as u64;
-      info!("Refreshed token for user {}", rw_user.user_info.name);
+      // info!("Refreshed token for user {}", rw_user.user_info.name);
 
       let tx = rw_user.write_tx.clone();
       let username = rw_user.user_info.name.clone();

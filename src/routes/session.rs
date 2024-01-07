@@ -1,3 +1,4 @@
+use crate::google;
 use crate::state::session::SessionSocket;
 use crate::state::session::Session;
 use crate::AppState;
@@ -21,10 +22,10 @@ struct NewPatient {
 
 #[post("/")]
 pub async fn create_session(req: HttpRequest, state: web::Data<AppState>, new_session: web::Json<NewPatient>) -> Result<HttpResponse, actix_web::Error> {
-  let mut state = state.write().await;
-  state.auth_token(req)?;
+  let mut app_state = state.write().await;
+  app_state.auth_token(req)?;
 
-  if !state.patients.iter().any(|patient| patient.uuid == new_session.patient) {
+  if !app_state.patients.iter().any(|patient| patient.uuid == new_session.patient) {
     return Ok(HttpResponse::NotFound().body("Patient not found"));
   }
 
@@ -42,12 +43,46 @@ pub async fn create_session(req: HttpRequest, state: web::Data<AppState>, new_se
     timeline: HashMap::new(),
     created_at: chrono::Utc::now().timestamp() as u64,
     last_updated: chrono::Utc::now().timestamp() as u64,
+    calendar_ids: HashMap::new(),
   };
-  
-  session.write();
-  state.broadcast(SseEvent::SessionAdded(&session)).await;
-  state.sessions.push(session);
 
+  let patient = app_state.patients.iter().find(|patient| patient.uuid == session.patient_uuid).unwrap();
+  let raw_calendar_event = google::RawCalendarEvent {
+    start: time_start,
+    end: time_end,
+    description: Some(patient.description.to_owned()),
+    summary: format!("S. {}", if patient.name.is_empty() { "<Pacjent bez nazwy>" } else { patient.name.as_str() }),
+    uuid: uuid.to_string(),
+  };
+
+  session.write();
+  app_state.broadcast(SseEvent::SessionAdded(&session)).await;
+  app_state.sessions.push(session);
+
+  let app_state = state.clone();
+  tokio::spawn(async move {
+    let mut app_state = app_state.write().await;
+    let mut ids = HashMap::new();
+    
+    for user in app_state.users.values() {      
+      let user = user.read().await;
+      if !user.settings.google_calendar_enabled {
+        continue;
+      }
+
+      match google::add_event(&user.access_token, &raw_calendar_event).await {
+        Ok(id) => { ids.insert(user.user_info.email.clone(), id); },
+        Err(err) => { error!("Failed to add event for user {}: {}", user.user_info.email, err); },
+      };
+    }
+
+    let session = app_state.sessions.iter_mut().find(|s| s.uuid == uuid.to_string()).unwrap();
+    session.calendar_ids = ids;
+    
+    info!("Added events for session {}", uuid);
+    session.write();
+  });
+  
   Ok(HttpResponse::Ok().body(uuid.to_string()))
 }
 

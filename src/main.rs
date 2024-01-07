@@ -15,6 +15,7 @@ mod state;
 mod routes;
 mod macros;
 mod consts;
+mod google;
 
 pub use macros::macros as logs;
 pub type AppState = Arc<RwLock<State>>;

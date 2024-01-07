@@ -72,22 +72,28 @@ pub mod macros {
 
   macro_rules! info {
     ($($arg:tt)*) => {
-      log::info!($($arg)*);
-      crate::macros::write("INFO", file!(), format!($($arg)*));
+      {
+        log::info!($($arg)*);
+        crate::macros::write("INFO", file!(), format!($($arg)*));
+      }
     }
   }
 
   macro_rules! warning {
     ($($arg:tt)*) => {
-      log::warn!($($arg)*);
-      crate::macros::write("WARN", file!(), format!($($arg)*));
+      {
+        log::warn!($($arg)*);
+        crate::macros::write("WARN", file!(), format!($($arg)*));
+      }
     }
   }
 
   macro_rules! error {
     ($($arg:tt)*) => {
-      log::error!($($arg)*);
-      crate::macros::write("ERROR", file!(), format!($($arg)*));
+      {
+        log::error!($($arg)*);
+        crate::macros::write("ERROR", file!(), format!($($arg)*));
+      }
     }
   }
 

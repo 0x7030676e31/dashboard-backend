@@ -18,17 +18,9 @@ pub struct User {
   pub secrets: Arc<Secrets>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct Settings {
   pub google_calendar_enabled: bool,
-}
-
-impl Default for Settings {
-  fn default() -> Self {
-    Settings {
-      google_calendar_enabled: false,
-    }
-  }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -51,7 +43,8 @@ pub struct RwUser {
   pub given_name: String,
   pub picture: String,
   pub locale: String,
-
+  
+  pub settings: Settings,
   pub access_token: String,
   pub expires_at: u64,
   pub refresh_token: String,
@@ -68,6 +61,7 @@ impl RwUser {
       picture: u.user_info.picture.clone(),
       locale: u.user_info.locale.clone(),
 
+      settings: u.settings.clone(),
       access_token: u.access_token.clone(),
       expires_at: u.expires_at,
       refresh_token: u.refresh_token.clone(),

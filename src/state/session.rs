@@ -30,6 +30,7 @@ pub struct Session {
   pub timeline: HashMap<u64, TimelineEvent>,
   pub created_at: u64,
   pub last_updated: u64,
+  pub calendar_ids: HashMap<String, String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -76,6 +77,7 @@ impl Session {
       timeline: fs_session.timeline,
       created_at: fs_session.created_at,
       last_updated: fs_session.last_updated,
+      calendar_ids: HashMap::new(),
     };
     
     Ok(session)
