@@ -396,3 +396,24 @@ pub enum SseEvent<'a> {
   SessionUpdated(&'a Session),
   SessionRemoved(&'a String),
 }
+
+pub trait DrainWith<T> {
+  fn drain_with<F>(&mut self, f: F) -> Vec<T> where F: FnMut(&mut T) -> bool;
+}
+
+impl<T> DrainWith<T> for Vec<T> {
+  fn drain_with<F>(&mut self, mut f: F) -> Vec<T> where F: FnMut(&mut T) -> bool {
+    let mut i = 0;
+    let mut removed = Vec::new();
+    while i < self.len() {
+      if f(&mut self[i]) {
+        removed.push(self.remove(i));
+      } else {
+        i += 1;
+      }
+    }
+
+    removed
+  }
+}
+

@@ -3,7 +3,7 @@ use crate::logs::*;
 use std::sync::OnceLock;
 use std::error::Error;
 
-use chrono::{TimeZone, Utc};
+use chrono::{TimeZone, Utc, FixedOffset};
 use reqwest::{Client, ClientBuilder};
 use serde::{Serialize, Deserialize};
 
@@ -27,7 +27,7 @@ pub struct RawCalendarEvent {
 
 #[derive(Serialize, Debug)]
 #[allow(non_snake_case)]
-struct Time {
+pub struct Time {
   dateTime: String,
   timeZone: String,
 }
@@ -45,22 +45,23 @@ struct ErrorBody {
 
 impl From<u64> for Time {
   fn from(time: u64) -> Self {
-    let utc = Utc.timestamp_millis_opt(time as i64  * 1000).unwrap();
+    let utc = Utc.timestamp_millis_opt(time as i64  * 1000 + 86400000).unwrap();
+    let utc = utc.with_timezone(&FixedOffset::east_opt(1 * 3600).unwrap());
     Time { dateTime: utc.to_rfc3339(), timeZone: "Europe/Warsaw".into() }
   }
 }
 
 #[derive(Serialize, Debug)]
-struct CreateEvent<'a> {
-  start: &'a Time,
-  end: &'a Time,
-  description: &'a Option<String>,
-  summary: &'a String,
-  id: &'a String,
+pub struct CreateEvent<'a> {
+  pub start: &'a Time,
+  pub end: &'a Time,
+  pub description: &'a Option<String>,
+  pub summary: &'a String,
+  pub id: &'a String,
 }
 
-
-pub async fn add_events(auth: &String, events: &[&RawCalendarEvent]) -> Result<Vec<(String, String)>, Box<dyn Error>> {
+#[allow(dead_code)]
+pub async fn add_events(auth: &String, events: &[RawCalendarEvent]) -> Result<Vec<(String, String)>, Box<dyn Error>> {
   let mut result = Vec::with_capacity(events.len());
   
   let batches = events.chunks(50);
@@ -72,7 +73,8 @@ pub async fn add_events(auth: &String, events: &[&RawCalendarEvent]) -> Result<V
   Ok(result)
 }
 
-async fn add_events_batch(auth: &String, events: &[&RawCalendarEvent]) -> Result<Vec<(String, String)>, Box<dyn Error>> {
+#[allow(dead_code)]
+async fn add_events_batch(auth: &String, events: &[RawCalendarEvent]) -> Result<Vec<(String, String)>, Box<dyn Error>> {
   let mut batch = String::new();
   let mut ids = Vec::with_capacity(events.len());
 
@@ -155,6 +157,168 @@ pub async fn add_event(auth: &String, event: &RawCalendarEvent) -> Result<String
   let text = resp.text().await?;
   let error: ErrorResponse = serde_json::from_str(&text)?;
   error!("Failed to add event: {}, {}", error.error.message, error.error.code);
+  
+  Err(error.error.message.into())
+}
+
+pub async fn delete_events(auth: &String, events: &[String]) -> Result<(), Box<dyn Error>> {
+  let batches = events.chunks(50);
+  for batch in batches {
+    delete_events_batch(auth, batch).await?;
+  }
+
+  Ok(())
+}
+
+async fn delete_events_batch(auth: &String, events: &[String]) -> Result<(), Box<dyn Error>> {
+  let mut batch = String::new();
+
+  for (idx, event) in events.iter().enumerate() {
+    batch.push_str(&format!(
+      "--batch_delete_boundary\r\n\
+      Content-Type: application/http\r\n\
+      Content-ID: <item{}>\r\n\
+      \r\n\
+      DELETE /calendar/v3/calendars/primary/events/{}\r\n\
+      \r\n\r\n",
+      idx + 1,
+      event,
+    ));
+  }
+
+  batch.push_str("--batch_delete_boundary--");
+  let resp = client()
+    .post("https://www.googleapis.com/batch/calendar/v3")
+    .bearer_auth(auth)
+    .header("Content-Type", "multipart/mixed; boundary=batch_delete_boundary")
+    .body(batch)
+    .send()
+    .await?;
+
+  let text = resp.text().await?;
+  let resp_codes = parse_multipart_body(&text);
+
+  for code in resp_codes {
+    if code != 200 {
+      error!("Failed to delete event: {}", code);
+      return Err("Failed to delete event".into());
+    }
+  }
+
+  Ok(())
+}
+
+pub async fn delete_event(auth: &String, event: &String) -> Result<(), Box<dyn Error>> {
+  let resp = client()
+    .delete(format!("https://www.googleapis.com/calendar/v3/calendars/primary/events/{}", event))
+    .bearer_auth(auth)
+    .send()
+    .await?;
+
+  if resp.status().is_success() {
+    return Ok(());
+  }
+
+  let text = resp.text().await?;
+  let error: ErrorResponse = serde_json::from_str(&text)?;
+  error!("Failed to delete event: {}, {}", error.error.message, error.error.code);
+  
+  Err(error.error.message.into())
+}
+
+pub struct EditEvent {
+  pub start: u64,
+  pub end: u64,
+  pub description: Option<String>,
+  pub summary: String,
+  pub id: String,
+}
+
+pub async fn edit_events(auth: &String, events: &[EditEvent]) -> Result<(), Box<dyn Error>> {
+  let batches = events.chunks(50);
+  for batch in batches {
+    edit_events_batch(auth, batch).await?;
+  }
+
+  Ok(())
+}
+
+async fn edit_events_batch(auth: &String, events: &[EditEvent]) -> Result<(), Box<dyn Error>> {
+  let mut batch = String::new();
+
+  for (idx, (session, event)) in events.iter().zip(events.iter()).enumerate() {
+    let event = CreateEvent {
+      start: &event.start.into(),
+      end: &event.end.into(),
+      description: &event.description,
+      summary: &event.summary,
+      id: &event.id,
+    };
+
+    let event = serde_json::to_string(&event)?;
+    batch.push_str(&format!(
+      "--batch_edit_boundary\r\n\
+      Content-Type: application/http\r\n\
+      Content-ID: <item{}>\r\n\
+      \r\n\
+      PUT /calendar/v3/calendars/primary/events/{}\r\n\
+      Content-Type: application/json\r\n\
+      \r\n\r\n\r\n\
+      {}\
+      \r\n\r\n",
+      idx + 1,
+      session.id,
+      event,
+    ));
+  }
+
+  batch.push_str("--batch_edit_boundary--");
+  let resp = client()
+    .post("https://www.googleapis.com/batch/calendar/v3")
+    .bearer_auth(auth)
+    .header("Content-Type", "multipart/mixed; boundary=batch_edit_boundary")
+    .body(batch)
+    .send()
+    .await?;
+
+  let text = resp.text().await?;
+  let resp_codes = parse_multipart_body(&text);
+
+  for code in resp_codes {
+    if code != 200 {
+      error!("Failed to edit event: {}", code);
+      return Err("Failed to edit event".into());
+    }
+  }
+
+  Ok(())
+}
+
+pub async fn edit_event(auth: &String, event: &EditEvent) -> Result<(), Box<dyn Error>> {
+  let create_event = CreateEvent {
+    start: &event.start.into(),
+    end: &event.end.into(),
+    description: &event.description,
+    summary: &event.summary,
+    id: &event.id,
+  };
+
+  let create_event = serde_json::to_string(&create_event)?;
+  let resp = client()
+    .put(format!("https://www.googleapis.com/calendar/v3/calendars/primary/events/{}", event.id))
+    .bearer_auth(auth)
+    .header("Content-Type", "application/json")
+    .body(create_event)
+    .send()
+    .await?;
+
+  if resp.status().is_success() {
+    return Ok(());
+  }
+
+  let text = resp.text().await?;
+  let error: ErrorResponse = serde_json::from_str(&text)?;
+  error!("Failed to edit event: {}, {}", error.error.message, error.error.code);
   
   Err(error.error.message.into())
 }

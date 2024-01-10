@@ -1,4 +1,4 @@
-#![feature(async_closure)]
+#![feature(async_closure, let_chains)]
 
 use crate::state::state::State;
 
@@ -31,6 +31,25 @@ pub struct EnvVars {
   dev_port: u16,
   users: Vec<String>,
 }
+
+// fn load_certified_key(path: String) -> Result<CertifiedKey, Box<dyn std::error::Error>> {
+//   let cert_path = format!("{}/certificate.pem", path);
+//   let key_path = format!("{}/private.pem", path);
+
+//   let cert_data = read(cert_path)?;
+//   let key_data = read(key_path)?;
+
+//   let cert_pems = parse_many(cert_data)?;
+//   let key_pems = parse_many(key_data)?;
+
+//   let key = rustls::PrivateKey(key_pems[0].contents());
+
+//   let certs = cert_pems.into_iter()
+//     .map(|pem| rustls::Certificate(pem.contents()))
+//     .collect();
+
+//   Ok(CertifiedKey::new(certs, Arc::new(key)))
+// }
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
@@ -92,7 +111,6 @@ async fn main() -> std::io::Result<()> {
       .run()
       .await
   }
-
 }
 
 async fn asset(path: web::Path<String>) -> impl Responder {

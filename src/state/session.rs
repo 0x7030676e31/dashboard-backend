@@ -43,6 +43,7 @@ struct FsSession {
   timeline: HashMap<u64, TimelineEvent>,
   created_at: u64,
   last_updated: u64,
+  calendar_ids: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,7 +78,7 @@ impl Session {
       timeline: fs_session.timeline,
       created_at: fs_session.created_at,
       last_updated: fs_session.last_updated,
-      calendar_ids: HashMap::new(),
+      calendar_ids: fs_session.calendar_ids,
     };
     
     Ok(session)
@@ -110,6 +111,7 @@ impl Session {
       timeline: self.timeline.clone(),
       created_at: self.created_at,
       last_updated: self.last_updated,
+      calendar_ids: self.calendar_ids.clone(),
     };
 
     if let Err(err) = fs::write(path, serde_json::to_string(&fs_session).unwrap()) {
