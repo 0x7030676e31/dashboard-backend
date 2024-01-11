@@ -3,7 +3,7 @@ use crate::logs::*;
 use std::sync::OnceLock;
 use std::error::Error;
 
-use chrono::{TimeZone, Utc, FixedOffset};
+use chrono::{TimeZone, Utc};
 use reqwest::{Client, ClientBuilder};
 use serde::{Serialize, Deserialize};
 
@@ -45,8 +45,7 @@ struct ErrorBody {
 
 impl From<u64> for Time {
   fn from(time: u64) -> Self {
-    let utc = Utc.timestamp_millis_opt(time as i64  * 1000 + 86400000).unwrap();
-    let utc = utc.with_timezone(&FixedOffset::east_opt(1 * 3600).unwrap());
+    let utc = Utc.timestamp_millis_opt(time as i64 * 1000).unwrap();
     Time { dateTime: utc.to_rfc3339(), timeZone: "Europe/Warsaw".into() }
   }
 }

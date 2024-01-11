@@ -8,7 +8,7 @@ use std::fs::File;
 use std::io;
 use std::env;
 
-use actix_web::{HttpServer, App, web, Responder};
+use actix_web::{HttpResponse, HttpServer, App, web, Responder};
 use actix_web::web::Data;
 use tokio::sync::{RwLock, mpsc};
 use include_dir::{include_dir, Dir};
@@ -149,14 +149,14 @@ async fn asset(path: web::Path<String>) -> impl Responder {
   let asset = DIST.get_file(&path).expect(format!("Failed to get asset: {}", path).as_str()).contents();
   
   if !path.ends_with(".js") {
-    return actix_web::HttpResponse::Ok().body(asset);
+    return HttpResponse::Ok().body(asset);
   }
 
-  actix_web::HttpResponse::Ok()
+  HttpResponse::Ok()
     .content_type("application/javascript")
     .body(asset)
 }
 
 async fn index() -> impl Responder {
-  actix_web::HttpResponse::Ok().body(INDEX)
+  HttpResponse::Ok().body(INDEX)
 }
