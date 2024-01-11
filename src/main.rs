@@ -3,13 +3,18 @@
 use crate::state::state::State;
 
 use std::sync::Arc;
+use std::collections::HashMap;
+use std::fs::File;
+use std::io;
 use std::env;
 
 use actix_web::{HttpServer, App, web, Responder};
 use actix_web::web::Data;
 use tokio::sync::{RwLock, mpsc};
 use include_dir::{include_dir, Dir};
-use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
+use rustls::{ServerConfig, Certificate, PrivateKey};
+use rustls::server::{ResolvesServerCert, ClientHello};
+use rustls::sign::{CertifiedKey, any_supported_type};
 
 mod state;
 mod routes;
@@ -24,6 +29,48 @@ pub type User = Arc<RwLock<state::user::User>>;
 static DIST: Dir<'_> = include_dir!("./dist/assets");
 static INDEX: &str = include_str!("../dist/index.html");
 
+struct MultiDomainResolver (HashMap<String, Arc<CertifiedKey>>);
+
+impl ResolvesServerCert for MultiDomainResolver {
+  fn resolve(&self, dns_name: ClientHello) -> Option<Arc<CertifiedKey>> {
+    dns_name.server_name().and_then(|name| self.0.get(name).cloned())
+  }
+}
+
+const DOMAIN: &str = "entitia";
+impl MultiDomainResolver {
+  pub fn add_cert(&mut self, path: &String, top_domain: &str) -> io::Result<()> {
+    let cert = format!("{}{}/certificate.pem", path, top_domain);
+    let key = format!("{}{}/private.pem", path, top_domain);
+
+    let cert_file = File::open(cert)?;
+    let mut cert_reader = io::BufReader::new(cert_file);
+    let certs = rustls_pemfile::certs(&mut cert_reader)
+      .map(|cert|cert.map(|cert| Certificate(cert.into_iter().map(|byte| byte.to_owned()).collect())))
+      .collect::<Result<Vec<_>, _>>()?;
+
+    let key_file = File::open(key)?;
+    let mut key_reader = io::BufReader::new(key_file);
+    let mut keys = rustls_pemfile::pkcs8_private_keys(&mut key_reader).collect::<Result<Vec<_>, _>>()?;
+
+    let key = match keys.len() {
+      1 => PrivateKey(keys.remove(0).secret_pkcs8_der().to_vec()),
+      0 => return Err(io::Error::new(io::ErrorKind::InvalidInput, "No keys found")),
+      _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, "Multiple keys found")),
+    };
+
+    let key = match any_supported_type(&key) {
+      Ok(key) => key,
+      Err(_) => return Err(io::Error::new(io::ErrorKind::InvalidInput, "Invalid key type")),
+    };
+
+    let cert = CertifiedKey::new(certs, key);
+    self.0.insert(format!("{}.{}", DOMAIN, top_domain), Arc::new(cert));
+
+    Ok(())
+  }
+}
+
 #[derive(Clone)]
 pub struct EnvVars {
   is_production: bool,
@@ -32,27 +79,8 @@ pub struct EnvVars {
   users: Vec<String>,
 }
 
-// fn load_certified_key(path: String) -> Result<CertifiedKey, Box<dyn std::error::Error>> {
-//   let cert_path = format!("{}/certificate.pem", path);
-//   let key_path = format!("{}/private.pem", path);
-
-//   let cert_data = read(cert_path)?;
-//   let key_data = read(key_path)?;
-
-//   let cert_pems = parse_many(cert_data)?;
-//   let key_pems = parse_many(key_data)?;
-
-//   let key = rustls::PrivateKey(key_pems[0].contents());
-
-//   let certs = cert_pems.into_iter()
-//     .map(|pem| rustls::Certificate(pem.contents()))
-//     .collect();
-
-//   Ok(CertifiedKey::new(certs, Arc::new(key)))
-// }
-
 #[tokio::main]
-async fn main() -> std::io::Result<()> {
+async fn main() -> io::Result<()> {
   dotenv::dotenv().ok();
 
   let is_production = env::var("PRODUCTION").map_or(false, |production| production == "true");
@@ -94,23 +122,26 @@ async fn main() -> std::io::Result<()> {
       .service(routes::get_routes())
   });
 
-  if is_production {
-    let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
-    builder
-      .set_private_key_file(format!("{}com/private.pem", path), SslFiletype::PEM)
-      .unwrap();
-    
-    builder.set_certificate_chain_file(format!("{}com/certificate.pem", path)).unwrap();
-    server
-      .bind_openssl(format!("0.0.0.0:{}", inner_port), builder)?
-      .run()
-      .await
-  } else {
-    server
+  if !is_production {
+    return server
       .bind(("0.0.0.0", inner_port))?
       .run()
       .await
   }
+
+  let mut resolver = MultiDomainResolver(HashMap::new());
+  resolver.add_cert(&path, "com")?;
+  resolver.add_cert(&path, "pl")?;
+
+  let cfg = ServerConfig::builder()
+    .with_safe_defaults()
+    .with_no_client_auth()
+    .with_cert_resolver(Arc::new(resolver));
+  
+  server
+    .bind_rustls_021(format!("0.0.0.0:{}", inner_port), cfg)?
+    .run()
+    .await
 }
 
 async fn asset(path: web::Path<String>) -> impl Responder {
