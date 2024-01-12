@@ -8,7 +8,10 @@ use std::fs::File;
 use std::io;
 use std::env;
 
+use actix_web::dev::Service;
+use actix_web::http::header;
 use actix_web::{HttpResponse, HttpServer, App, web, Responder};
+use actix_web_lab::middleware::{from_fn, redirect_to_non_www};
 use actix_web::web::Data;
 use tokio::sync::{RwLock, mpsc};
 use include_dir::{include_dir, Dir};
@@ -33,7 +36,10 @@ struct MultiDomainResolver (HashMap<String, Arc<CertifiedKey>>);
 
 impl ResolvesServerCert for MultiDomainResolver {
   fn resolve(&self, dns_name: ClientHello) -> Option<Arc<CertifiedKey>> {
-    dns_name.server_name().and_then(|name| self.0.get(name).cloned())
+    dns_name.server_name().and_then(|name| {
+      let name = if name.starts_with("www.") { name[4..].to_owned() } else { name.to_owned() };
+      self.0.get(&name).cloned()
+    })
   }
 }
 
@@ -79,6 +85,13 @@ pub struct EnvVars {
   users: Vec<String>,
 }
 
+// const ORIGINS: [&str; 4] = [
+//   "https://entitia.com",
+//   "https://www.entitia.com",
+//   "https://entitia.pl",
+//   "https://www.entitia.pl",
+// ];
+
 #[tokio::main]
 async fn main() -> io::Result<()> {
   dotenv::dotenv().ok();
@@ -113,13 +126,25 @@ async fn main() -> io::Result<()> {
 
   let server = HttpServer::new(move || {
     App::new()
-    .wrap(actix_cors::Cors::permissive())
       .app_data(Data::new(state.clone()))
       .app_data(Data::new(env_vars.clone()))
       .route("/assets/{path:.*}", web::get().to(asset))
       .route("/", web::get().to(index))
       .default_service(web::get().to(index))
       .service(routes::get_routes())
+      .wrap(from_fn(redirect_to_non_www))
+      .wrap_fn(|req, srv| {
+        // let origin = req.headers().get("origin").map(|origin| origin.to_str().unwrap_or("")).unwrap_or("");
+        // let origin = origin.trim_end_matches('/');
+
+        let fut = srv.call(req);
+        async move {
+          let mut res = fut.await?;
+          res.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, header::HeaderValue::from_static("*"));
+          res.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_METHODS, header::HeaderValue::from_static("*"));
+          Ok(res)
+        }
+      })
   });
 
   if !is_production {
