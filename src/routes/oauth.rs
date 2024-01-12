@@ -142,8 +142,8 @@ pub async fn oauth(req: HttpRequest, state: web::Data<AppState>, env: web::Data<
         secrets: Arc::clone(&appstate.secrets),
       };
 
-      let token = appstate.add_new_user(user, rx);
-      token
+      
+      appstate.add_new_user(user, rx)
     }
   };
   

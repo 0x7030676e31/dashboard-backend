@@ -204,7 +204,7 @@ impl SessionSocket {
         }
       };
 
-      state.broadcast_socket(SseEvent::SessionUpdated(&session), arc_state.socket_id).await;
+      state.broadcast_socket(SseEvent::SessionUpdated(session), arc_state.socket_id).await;
       arc_state.is_session_update_scheduled.store(false, Ordering::Relaxed);
     });
   }
@@ -237,7 +237,7 @@ impl SessionSocket {
         }
       };
 
-      state.broadcast_socket(SseEvent::PatientUpdated(&patient), arc_state.socket_id).await;
+      state.broadcast_socket(SseEvent::PatientUpdated(patient), arc_state.socket_id).await;
       arc_state.is_patient_update_scheduled.store(false, Ordering::Relaxed);
     });
   }

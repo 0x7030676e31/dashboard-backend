@@ -67,7 +67,7 @@ pub async fn update_patient(req: HttpRequest, state: web::Data<AppState>, uuid: 
     return Ok(HttpResponse::Conflict().body("Patient already exists"));
   }
 
-  let patient = match app_state.patients.iter_mut().find(|patient| patient.uuid == uuid.to_string()) {
+  let patient = match app_state.patients.iter_mut().find(|patient| patient.uuid == uuid) {
     Some(patient) => patient,
     None => return Ok(HttpResponse::NotFound().body("Patient not found")),
   };
@@ -107,8 +107,8 @@ pub async fn update_patient(req: HttpRequest, state: web::Data<AppState>, uuid: 
       for session in sessions {
         session.calendar_ids.iter().for_each(|(mail, id)| {
           batches.entry(mail.clone()).or_default().push(google::EditEvent {
-            start: session.start.into(),
-            end: session.end.into(),
+            start: session.start,
+            end: session.end,
             description: Some(desc.clone()),
             summary: summary.clone(),
             id: id.to_owned(),
@@ -150,7 +150,7 @@ pub async fn delete_patient(req: HttpRequest, state: web::Data<AppState>, uuid: 
   app_state.auth_token(req)?;
 
   let uuid = uuid.into_inner();
-  let patient = match app_state.patients.iter().position(|patient| patient.uuid == uuid.to_string()) {
+  let patient = match app_state.patients.iter().position(|patient| patient.uuid == uuid) {
     Some(index) => app_state.patients.remove(index),
     None => return Ok(HttpResponse::NotFound().body("Patient not found")),
   };

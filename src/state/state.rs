@@ -88,7 +88,7 @@ impl ArcState for AppState {
     tokio::spawn(async move {
       time::sleep(time::Duration::from_secs(60)).await;
       let mut state = state.write().await;
-      if let Some(_) = state.auth_codes.remove(&code2) {
+      if state.auth_codes.remove(&code2).is_some() {
         info!("Removed auth code: {}", code2);
       }
     });
@@ -264,7 +264,7 @@ impl State {
   pub fn check_auth(&self, req: HttpRequest) -> Result<Arc<RwLock<User>>, actix_web::Error> {
     req.headers().get("Authorization").map_or(Err(actix_web::error::ErrorUnauthorized("Missing Authorization header")), |token| {
       let token = token.to_str().map_err(|_| actix_web::error::ErrorUnauthorized("Invalid Authorization header"))?;
-      self.users.get(token).map(|u| Arc::clone(u)).ok_or(actix_web::error::ErrorUnauthorized("Unauthorized"))
+      self.users.get(token).map(Arc::clone).ok_or(actix_web::error::ErrorUnauthorized("Unauthorized"))
     })
   }
 

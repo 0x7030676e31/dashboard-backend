@@ -52,7 +52,7 @@ impl MultiDomainResolver {
     let cert_file = File::open(cert)?;
     let mut cert_reader = io::BufReader::new(cert_file);
     let certs = rustls_pemfile::certs(&mut cert_reader)
-      .map(|cert|cert.map(|cert| Certificate(cert.into_iter().map(|byte| byte.to_owned()).collect())))
+      .map(|cert|cert.map(|cert| Certificate(cert.iter().map(|byte| byte.to_owned()).collect())))
       .collect::<Result<Vec<_>, _>>()?;
 
     let key_file = File::open(key)?;
@@ -171,7 +171,7 @@ async fn main() -> io::Result<()> {
 
 async fn asset(path: web::Path<String>) -> impl Responder {
   let path = path.into_inner();
-  let asset = DIST.get_file(&path).expect(format!("Failed to get asset: {}", path).as_str()).contents();
+  let asset = DIST.get_file(&path).unwrap_or_else(|| panic!("Failed to get asset: {}", path)).contents();
   
   if !path.ends_with(".js") {
     return HttpResponse::Ok().body(asset);
