@@ -232,7 +232,6 @@ impl State {
     let users = self.users.clone();
     let sse_tokens = self.sse_tokens.clone();
 
-    info!("Writing state to disk...");
     tokio::spawn(async move {
       let bare_users = users.values().map(|u| u.read());
       let bare_users = future::join_all(bare_users).await;
@@ -243,14 +242,9 @@ impl State {
       };
 
       let json = serde_json::to_string(&rwstate).unwrap();
-      match fs::write(path, json) {
-        Ok(_) => {
-          info!("Successfully wrote state to disk");
-        },
-        Err(err) => {
-          error!("There was an error while writing the state to disk: {}", err);
-        },
-      };
+      if let Err(err) = fs::write(path, json) {
+        error!("There was an error while writing the state to disk: {}", err);
+      }
     });
   }
 

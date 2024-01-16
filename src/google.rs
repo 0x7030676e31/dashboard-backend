@@ -322,7 +322,7 @@ pub async fn edit_event(auth: &String, event: &EditEvent) -> Result<(), Box<dyn 
   Err(error.error.message.into())
 }
 
-fn parse_multipart_body(body: &String) -> Vec<u16> {
+fn parse_multipart_body(body: &str) -> Vec<u16> {
   let lines = body.split("\\r\\n");
   let mut codes: Vec<u16> = Vec::new();
   for line in lines {

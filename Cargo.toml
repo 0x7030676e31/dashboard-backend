@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 actix = "0.13.1"
+actix-cors = "0.7.0"
 actix-web = { version="4.4.0", features=["rustls-0_21"] }
 actix-web-actors = "4.2.0"
 actix-web-lab = "0.20.1"

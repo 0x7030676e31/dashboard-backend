@@ -106,7 +106,7 @@ pub async fn update_session(req: HttpRequest, state: web::Data<AppState>, payloa
   }
 
   let session_uuid = session_uuid.into_inner();
-  let session = match app_state.sessions.iter_mut().find(|s| &s.uuid == &session_uuid) {
+  let session = match app_state.sessions.iter_mut().find(|s| s.uuid == session_uuid) {
     Some(session) => session,
     None => return Ok(HttpResponse::NotFound().body("Not Found")),
   };
@@ -182,7 +182,7 @@ pub async fn delete_session(req: HttpRequest, state: web::Data<AppState>, sessio
   app_state.auth_token(req)?;
 
   let uuid = session.into_inner();
-  let session = match app_state.sessions.iter().find(|s| &s.uuid == &uuid) {
+  let session = match app_state.sessions.iter().find(|s| s.uuid == uuid) {
     Some(session) => session,
     None => return Ok(HttpResponse::NotFound().body("Not Found")),
   };
@@ -221,7 +221,7 @@ pub async fn stream(req: HttpRequest, state: web::Data<AppState>, payload: web::
   let app_state = state.clone();
   let app_state = app_state.read().await;
   
-  if !app_state.sessions.iter().any(|s| &s.uuid == &session) {
+  if !app_state.sessions.iter().any(|s| s.uuid == session) {
     return Ok(HttpResponse::NotFound().body("Not Found"));
   }
 

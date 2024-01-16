@@ -17,15 +17,15 @@ use tokio::sync::mpsc;
 pub async fn index(req: HttpRequest, state: web::Data<AppState>, env: web::Data<EnvVars>) -> impl Responder {
   let origin = if env.is_production {
     let origin = req.connection_info().host().to_owned();
-    format!("https://{}", if origin.starts_with("www.") { &origin[4..] } else { &origin })
+    format!("https://{}", if let Some(strip) = origin.strip_prefix("www.") { strip } else { &origin })
   } else {
     format!("http://localhost:{}", env.inner_port)
   };
   
   let appstate = state.read().await;
-  let url = format!("https://accounts.google.com/o/oauth2/v2/auth?scope={}&access_type=offline&response_type=code&redirect_uri={}&client_id={}&prompt=consent",
+  let url = format!("https://accounts.google.com/o/oauth2/v2/auth?scope={}&access_type=offline&response_type=code&redirect_uri={}/oauth&client_id={}&prompt=consent",
     consts::SCOPES.join(" "),
-    format!("{}/oauth", origin),
+    origin,
     appstate.secrets.client_id
   );
 
@@ -50,7 +50,7 @@ pub struct GoogleResp {
 pub async fn oauth(req: HttpRequest, state: web::Data<AppState>, env: web::Data<EnvVars>, query: web::Query<Query>) -> Either<String, web::Redirect> {
   let origin = if env.is_production {
     let origin = req.connection_info().host().to_owned();
-    format!("https://{}", if origin.starts_with("www.") { &origin[4..] } else { &origin })
+    format!("https://{}", if let Some(strip) = origin.strip_prefix("www.") { strip } else { &origin })
   } else {
     format!("http://localhost:{}", env.inner_port)
   };
