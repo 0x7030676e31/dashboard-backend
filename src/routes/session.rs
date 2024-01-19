@@ -1,7 +1,5 @@
-use crate::google;
-use crate::state::session::SessionSocket;
-use crate::state::session::Session;
-use crate::AppState;
+use crate::state::session::{SessionSocket, Session, Emotion};
+use crate::{AppState, google};
 use crate::state::state::SseEvent;
 use crate::logs::*;
 
@@ -33,14 +31,23 @@ pub async fn create_session(req: HttpRequest, state: web::Data<AppState>, new_se
   let NewPatient { patient, time_start, time_end } = new_session.into_inner();
   info!("Created session for patient {}", patient);
 
+  let emotion_uuid = uuid::Uuid::new_v4();
   let uuid = uuid::Uuid::new_v4();
+
   let session = Session {
     uuid: uuid.to_string(),
     patient_uuid: patient,
     start: time_start,
     end: time_end,
     paid: 0.0,
-    emotions: Vec::new(),
+    emotions: vec![Emotion {
+      uuid: emotion_uuid.to_string(),
+      id: None,
+      kind: None,
+      aquired_age: None,
+      aquired_person: String::new(),
+      created_at: chrono::Utc::now().timestamp() as u64,
+    }],
     timeline: HashMap::new(),
     created_at: chrono::Utc::now().timestamp() as u64,
     last_updated: chrono::Utc::now().timestamp() as u64,
