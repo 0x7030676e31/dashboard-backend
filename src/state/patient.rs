@@ -31,7 +31,13 @@ struct FsPatient {
 impl Patient {
   pub fn from_file<P: AsRef<Path>>(path: P) -> io::Result<Self> {
     let file = fs::read_to_string(path.as_ref())?;
-    let fs_patient: FsPatient = serde_json::from_str(&file)?;
+    let fs_patient = serde_json::from_str::<FsPatient>(&file);
+
+    if fs_patient.is_err() {
+      log::error!("Couldn't parse patient file {}.json", path.as_ref().file_stem().unwrap().to_str().unwrap());
+    }
+
+    let fs_patient = fs_patient?;
     let patient = Patient {
       uuid: path.as_ref().file_stem().unwrap().to_str().unwrap().to_owned(),
       description: fs_patient.description,

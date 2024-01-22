@@ -8,8 +8,8 @@ use std::fs::File;
 use std::io;
 use std::env;
 
-// use actix_web::dev::Service;
-// use actix_web::http::header;
+use actix_web::dev::Service;
+use actix_web::http::header;
 use actix_web::{HttpResponse, HttpServer, App, web, Responder};
 use actix_web_lab::middleware::{from_fn, redirect_to_non_www};
 use actix_web::web::Data;
@@ -24,6 +24,7 @@ mod routes;
 mod macros;
 mod consts;
 mod google;
+mod backup;
 
 pub use macros::macros as logs;
 pub type AppState = Arc<RwLock<State>>;
@@ -85,12 +86,12 @@ pub struct EnvVars {
   users: Vec<String>,
 }
 
-// const ORIGINS: [&str; 4] = [
-//   "https://entitia.com",
-//   "https://www.entitia.com",
-//   "https://entitia.pl",
-//   "https://www.entitia.pl",
-// ];
+const ORIGINS: [&str; 4] = [
+  "https://entitia.com",
+  "https://www.entitia.com",
+  "https://entitia.pl",
+  "https://www.entitia.pl",
+];
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
@@ -123,10 +124,10 @@ async fn main() -> io::Result<()> {
   State::spawn_ping_loop(Arc::clone(&state));
   
   logs::info!("Starting server on inner port {}...", inner_port);
+  backup::start_backup_loop(&path);
 
   let server = HttpServer::new(move || {
     App::new()
-      .wrap(actix_cors::Cors::permissive())
       .app_data(Data::new(state.clone()))
       .app_data(Data::new(env_vars.clone()))
       .route("/assets/{path:.*}", web::get().to(asset))
@@ -134,18 +135,25 @@ async fn main() -> io::Result<()> {
       .default_service(web::get().to(index))
       .service(routes::get_routes())
       .wrap(from_fn(redirect_to_non_www))
-      // .wrap_fn(|req, srv| {
-      //   // let origin = req.headers().get("origin").map(|origin| origin.to_str().unwrap_or("")).unwrap_or("");
-      //   // let origin = origin.trim_end_matches('/');
+      .wrap_fn(|req, srv| {
+        let origin = req.headers().get("origin").map(|origin| origin.to_str().unwrap_or("")).unwrap_or("");
+        let origin = origin.trim_end_matches('/').to_owned();
 
-      //   let fut = srv.call(req);
-      //   async move {
-      //     let mut res = fut.await?;
-      //     res.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, header::HeaderValue::from_static("*"));
-      //     res.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_METHODS, header::HeaderValue::from_static("*"));
-      //     Ok(res)
-      //   }
-      // })
+        let fut = srv.call(req);
+        async move {
+          let mut res = fut.await?;
+          
+          if ORIGINS.contains(&origin.as_str()) {
+            res.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, header::HeaderValue::from_str(&origin).unwrap());
+          }
+
+          res.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, header::HeaderValue::from_static("*"));
+          res.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_METHODS, header::HeaderValue::from_static("POST, GET, PATCH, DELETE, OPTIONS"));
+          res.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_HEADERS, header::HeaderValue::from_static("content-type, authorization"));
+          
+          Ok(res)
+        }
+      })
   });
 
   if !is_production {

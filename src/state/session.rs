@@ -67,7 +67,13 @@ pub enum TimelineEvent {
 impl Session {
   pub fn from_file<P: AsRef<Path>>(path: P) -> io::Result<Self> {
     let file = fs::read_to_string(path.as_ref())?;
-    let fs_session: FsSession = serde_json::from_str(&file)?;
+    let fs_session = serde_json::from_str::<FsSession>(&file);
+
+    if fs_session.is_err() {
+      log::error!("Couldn't parse session file {}.json", path.as_ref().file_stem().unwrap().to_str().unwrap());
+    }
+
+    let fs_session = fs_session?;
     let session = Session {
       uuid: path.as_ref().file_stem().unwrap().to_str().unwrap().to_string(),
       patient_uuid: fs_session.patient_uuid,
