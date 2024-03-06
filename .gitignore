@@ -3,6 +3,4 @@
 .env
 .env.prod
 build.sh
-nginx
 .VSCodeCounter
-todo

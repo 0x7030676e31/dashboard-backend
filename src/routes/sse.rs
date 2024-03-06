@@ -59,6 +59,7 @@ pub async fn stream(state: web::Data<AppState>, query: web::Query<SseInfo>) -> E
     user_mail: &user.user_info.email,
     user_avatar: &user.user_info.picture,
     settings: &user.settings,
+    events: &Vec::new(),
   };
 
   let tx2 = tx.clone();

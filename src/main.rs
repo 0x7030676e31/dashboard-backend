@@ -117,7 +117,12 @@ async fn main() -> io::Result<()> {
   env_logger::init();
 
   let (write_tx, write_rx) = mpsc::channel(1);
-  let state = State::new(write_tx, path.clone())?;
+  let mut state = State::new(write_tx, path.clone())?;
+  
+  if env_vars.is_production {
+    state.init_google_webhooks().await;
+  }
+
   let state = Arc::new(RwLock::new(state));
   
   State::start_write_loop(Arc::clone(&state), write_rx);

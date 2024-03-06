@@ -5,6 +5,7 @@ mod patient;
 mod oauth;
 mod sse;
 mod settings;
+mod event;
 
 pub fn get_routes() -> Scope {
   web::scope("")
@@ -18,6 +19,7 @@ fn api() -> Scope {
     .service(oauth::auth)
     .service(sse::get_token)
     .service(sse::stream)
+    .service(event::index)
     .service(sessions())
     .service(patients())
     .service(settings::index)
