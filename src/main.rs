@@ -25,6 +25,7 @@ mod macros;
 mod consts;
 mod google;
 mod backup;
+mod filestreamer;
 
 pub use macros::macros as logs;
 pub type AppState = Arc<RwLock<State>>;
@@ -117,17 +118,18 @@ async fn main() -> io::Result<()> {
   env_logger::init();
 
   let (write_tx, write_rx) = mpsc::channel(1);
-  let mut state = State::new(write_tx, path.clone())?;
+  let state = State::new(write_tx, path.clone())?;
   
-  if env_vars.is_production {
-    state.init_google_webhooks().await;
-  }
-
   let state = Arc::new(RwLock::new(state));
-  
+
+  State::schedule_webhook_refresh(&state).await;
   State::start_write_loop(Arc::clone(&state), write_rx);
   State::spawn_ping_loop(Arc::clone(&state));
   
+  if env_vars.is_production {
+    State::init_google_webhooks(&state).await;
+  }
+
   logs::info!("Starting server on inner port {}...", inner_port);
   backup::start_backup_loop(&path);
 

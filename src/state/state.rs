@@ -30,7 +30,7 @@ pub struct State {
   pub patients: Vec<Patient>,
   pub users: HashMap<String, Arc<RwLock<User>>>,
   pub path: String,
-  pub calendar_webhooks: Vec<GoogleWebhook>,
+  pub calendar_webhooks: HashMap<String, GoogleWebhook>,
 
   // <Access token, SSE token>
   pub sse_tokens: HashMap<String, String>,
@@ -47,23 +47,48 @@ pub struct State {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GoogleWebhook {
-  pub user: String,
   pub uuid: String,
   pub resource_id: String,
-  pub token: String,
+  pub expiry: u64,
+  pub events: Vec<String>,
+  pub sync_token: String,
 }
-
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GoogleWebhookResp {
   resource_id: String,
+  expiration: String,
+} 
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct EventsListResp {
+  pub next_sync_token: String,
+  pub items: Vec<GoogleEvent>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct GoogleEvent {
+  id: String,
+  status: Option<String>,
+  color_id: Option<String>,
+  summary: Option<String>,
+  start: DateTime,
+  end: DateTime,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct DateTime {
+  date_time: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct RwState {
   users: HashMap<String, RwUser>,
   sse_tokens: HashMap<String, String>,
-  calendar_webhooks: Option<Vec<GoogleWebhook>>,
+  calendar_webhooks: Option<HashMap<String, GoogleWebhook>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -143,7 +168,7 @@ impl State {
         patients: Patient::from_dir(&patients_dir)?,
         users: HashMap::new(),
         path: file_path,
-        calendar_webhooks: Vec::new(),
+        calendar_webhooks: HashMap::new(),
         sse_tokens: HashMap::new(),
         sse: Vec::new(),
         secrets: Arc::new(secrets),
@@ -270,60 +295,134 @@ impl State {
     });
   }
 
-  pub async fn init_google_webhooks(&mut self) {   
-    let users_to_add = self.users.keys().filter(|token| self.calendar_webhooks.iter().all(|wh| wh.user != **token)).cloned().collect::<Vec<_>>();
-    for user in users_to_add {
-      info!("Creating Google webhook for user {}", user);
-      self.create_google_webhook(&user).await;
+  pub async fn schedule_webhook_refresh(state: &AppState) {
+    let app_state = state.read().await;
+
+    for (user, webhook) in app_state.calendar_webhooks.iter() {
+      let state = state.clone();
+      let user = user.clone();
+      
+      let diff = webhook.expiry - chrono::Utc::now().timestamp_millis() as u64;
+      tokio::spawn(async move {
+        info!("Scheduling Google webhook refresh for user {} in {} min", user, diff / 1000 / 60);
+        time::sleep(time::Duration::from_millis(diff)).await;
+        Self::create_google_webhook(state, user);
+      });
     }
   }
 
-  pub async fn create_google_webhook(&mut self, user: &String) {
-    let token = Self::generate_token();
-    let uuid = Uuid::new_v4().to_string();
-    let auth = format!("Bearer {}", self.users.get(user).unwrap().read().await.access_token);
+  pub async fn init_google_webhooks(state: &AppState) {
+    let app_state = state.read().await;
+    let users_to_add = app_state.users.keys().filter(|token| app_state.calendar_webhooks.get(*token).is_none()).map(|s| s.clone()).collect::<Vec<_>>();
+    drop(app_state);
 
-    let client = ClientBuilder::new()
-      .danger_accept_invalid_certs(true)
-      .build()
-      .unwrap();
+    for user in users_to_add {
+      info!("Creating Google webhook for user {}", user);
+      Self::create_google_webhook(Arc::clone(&state), user);
+    }
+  }
 
-    let res = client
-      .post("https://www.googleapis.com/calendar/v3/calendars/primary/events/watch")
-      .header("Authorization", auth)
-      .header("Content-Type", "application/json")
-      .json(&serde_json::json!({
-        "id": uuid,
-        "type": "web_hook",
-        "address": "https://entitia.com/api/event",
-        "token": token,
-      }))
-      .send()
-      .await;
+  pub fn create_google_webhook(state: AppState, user: String) {
+    tokio::spawn(async move {    
+      loop {
+        let uuid = Uuid::new_v4().to_string();
+        
+        let app_state = state.read().await;
+        let auth = format!("Bearer {}", app_state.users.get(&user).unwrap().read().await.access_token);
+        drop(app_state);
 
-    let res = match res {
-      Ok(res) => res,
-      Err(err) => {
-        error!("There was an error while creating the Google webhook for user {}: {}", user, err);
-        return;
-      },
-    };
+        let client = ClientBuilder::new()
+          .danger_accept_invalid_certs(true)
+          .build()
+          .unwrap();
 
-    let text = res.text().await.unwrap();
-    let res = match serde_json::from_str::<GoogleWebhookResp>(&text) {
-      Ok(res) => res,
-      Err(err) => {
-        error!("There was an error while creating the Google webhook for user {}: {} --- {}", user, err, text);
-        return;
-      },
-    };
+        let res = client
+          .post("https://www.googleapis.com/calendar/v3/calendars/primary/events/watch")
+          .header("Authorization", &auth)
+          .header("Content-Type", "application/json")
+          .json(&serde_json::json!({
+            "id": uuid,
+            "type": "web_hook",
+            "address": "https://entitia.com/api/events/webhook",
+          }))
+          .send()
+          .await;
 
-    info!("Created Google webhook for user {}", user);
-    self.calendar_webhooks.push(GoogleWebhook {
-      user: user.clone(),
-      uuid,
-      resource_id: res.resource_id,
-      token,
+        let res = match res {
+          Ok(res) => res,
+          Err(err) => {
+            error!("There was an error while creating the Google webhook for user {}: {}", user, err);
+            return;
+          },
+        };
+
+        let webhook = match res.json::<GoogleWebhookResp>().await {
+          Ok(res) => res,
+          Err(err) => {
+            error!("There was an error while creating the Google webhook for user {}: {}", user, err);
+            return;
+          },
+        };
+
+        let then = chrono::Utc::now().checked_sub_months(chrono::Months::new(1)).unwrap();
+        let then = then.to_rfc3339();
+
+        info!("Created Google webhook for user {}", user);
+        let res = client.get("https://www.googleapis.com/calendar/v3/calendars/primary/events")
+          .query(&[
+            ("timeMin", then.as_str()),
+            ("maxResults", "2500"),
+            ("singleEvents", "true"),
+          ])
+          .header("Authorization", auth)
+          .send()
+          .await;
+
+        let res = match res {
+          Ok(res) => res,
+          Err(err) => {
+            error!("There was an error while creating the Google webhook for user {}: {}", user, err);
+            return;
+          },
+        };
+
+        let res = match res.json::<EventsListResp>().await {
+          Ok(res) => res,
+          Err(err) => {
+            error!("There was an error while creating the Google webhook for user {}: {}", user, err);
+            return;
+          },
+        };
+
+        let mut app_state = state.write().await;
+
+        // If /events doesn't exists, create it
+        if fs::metadata(format!("{}events", app_state.path)).is_err() {
+          fs::create_dir(format!("{}events", app_state.path)).unwrap();
+        }
+
+        info!("Fetched {} events for user {}", res.items.len(), user);
+        let events = serde_json::to_string(&res.items).unwrap();
+        fs::write(format!("{}events/{}.json", app_state.path, user), events).unwrap();
+
+        // Timestamp in ms
+        let expiry = webhook.expiration.parse().unwrap();
+        app_state.calendar_webhooks.insert(user.clone(), GoogleWebhook {
+          uuid,
+          resource_id: webhook.resource_id,
+          expiry,
+          events: res.items.iter().map(|e| e.id.clone()).collect(),
+          sync_token: res.next_sync_token,
+        });
+
+        
+        app_state.write();
+        drop(app_state);
+        
+        info!("Created Google events file for user {}", user);
+        let diff = expiry - chrono::Utc::now().timestamp_millis() as u64;
+        time::sleep(time::Duration::from_millis(diff)).await;
+      }
     });
   }
 
@@ -461,7 +560,6 @@ pub enum SseEvent<'a> {
     user_mail: &'a str,
     user_avatar: &'a str,
     settings: &'a Settings,
-    events: &'a Vec<()>,
   },
   PatientAdded(&'a Patient),
   PatientUpdated(&'a Patient),
