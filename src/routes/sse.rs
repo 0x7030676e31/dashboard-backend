@@ -72,7 +72,7 @@ pub async fn stream(state: web::Data<AppState>, query: web::Query<SseInfo>) -> E
     }
   });
   
-  app_state.sse.push(tx);
+  app_state.sse.push((token.clone(), tx));
   app_state.sse_tokens.entry(token).and_modify(|e| *e = State::generate_token());
   
   drop(app_state);

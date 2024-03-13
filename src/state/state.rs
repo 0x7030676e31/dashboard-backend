@@ -34,7 +34,7 @@ pub struct State {
 
   // <Access token, SSE token>
   pub sse_tokens: HashMap<String, String>,
-  pub sse: Vec<mpsc::Sender<sse::Event>>,
+  pub sse: Vec<(String, mpsc::Sender<sse::Event>)>,
   pub secrets: Arc<Secrets>,
   pub write_tx: mpsc::Sender<()>,
 
@@ -67,10 +67,10 @@ pub struct EventsListResp {
   pub items: Vec<GoogleEvent>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct GoogleEvent {
-  id: String,
+  pub id: String,
   status: Option<String>,
   color_id: Option<String>,
   summary: Option<String>,
@@ -78,7 +78,7 @@ pub struct GoogleEvent {
   end: DateTime,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct DateTime {
   date_time: String,
@@ -248,7 +248,7 @@ impl State {
     
     let mut active_clients = Vec::new();
     for client in clients {
-      let is_ok = client.send(sse::Event::Comment("ping".into())).await.is_ok();
+      let is_ok = client.1.send(sse::Event::Comment("ping".into())).await.is_ok();
       if is_ok {
         active_clients.push(client);
       }
@@ -343,7 +343,7 @@ impl State {
           .json(&serde_json::json!({
             "id": uuid,
             "type": "web_hook",
-            "address": "https://entitia.com/api/events/webhook",
+            "address": "https://entitia.com/api/webhook/v6",
           }))
           .send()
           .await;
@@ -524,7 +524,22 @@ impl State {
     let msg = serde_json::to_string(&BroadcastMessage { payload: event, ack, socket_ack }).unwrap();
     info!("Broadcasting SSE message to {} clients", self.sse.len());
 
-    let futs = self.sse.iter().map(|tx| tx.send(sse::Data::new(msg.clone()).into()));
+    let futs = self.sse.iter().map(|(_, tx)| tx.send(sse::Data::new(msg.clone()).into()));
+    let res = future::join_all(futs).await;
+    
+    for (i, res) in res.into_iter().enumerate() {
+      if let Err(err) = res {
+        error!("Couldn't send message to sse client {}: {}", i, err);
+      }
+    }
+  }
+
+  async fn broadcast_message_to<'a>(&self, event: SseEvent<'a>, socket_ack: Option<u64>, token: &str) {
+    let ack = self.ack.fetch_add(1, Ordering::Relaxed);
+    let msg = serde_json::to_string(&BroadcastMessage { payload: event, ack, socket_ack }).unwrap();
+    info!("Broadcasting SSE message to {} clients", self.sse.len());
+
+    let futs = self.sse.iter().filter(|(t, _)| t == token).map(|(_, tx)| tx.send(sse::Data::new(msg.clone()).into()));
     let res = future::join_all(futs).await;
     
     for (i, res) in res.into_iter().enumerate() {
@@ -540,6 +555,14 @@ impl State {
 
   pub async fn broadcast_socket<'a>(&self, msg: SseEvent<'a>, socket_ack: u64) {
     self.broadcast_message(msg, Some(socket_ack)).await;
+  }
+
+  pub async fn broadcast_to<'a>(&self, msg: SseEvent<'a>, token: &str) {
+    self.broadcast_message_to(msg, None, token).await;
+  }
+
+  pub async fn broadcast_socket_to<'a>(&self, msg: SseEvent<'a>, socket_ack: u64, token: &str) {
+    self.broadcast_message_to(msg, Some(socket_ack), token).await;
   }
 }
 
@@ -567,10 +590,9 @@ pub enum SseEvent<'a> {
   SessionAdded(&'a Session),
   SessionUpdated(&'a Session),
   SessionRemoved(&'a String),
-  // To be added
-  EventAdded(&'a ()),
-  EventUpdated(&'a ()),
-  EventRemoved(&'a ()),
+  EventAdded(&'a GoogleEvent),
+  EventUpdated(&'a GoogleEvent),
+  EventRemoved(&'a String),
 }
 
 pub trait DrainWith<T> {
