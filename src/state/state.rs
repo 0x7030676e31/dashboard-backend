@@ -50,9 +50,9 @@ pub struct GoogleWebhook {
   pub uuid: String,
   pub resource_id: String,
   pub expiry: u64,
-  pub events: Vec<String>,
   pub sync_token: String,
 }
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GoogleWebhookResp {
@@ -71,11 +71,12 @@ pub struct EventsListResp {
 #[serde(rename_all = "camelCase")]
 pub struct GoogleEvent {
   pub id: String,
-  status: Option<String>,
-  color_id: Option<String>,
-  summary: Option<String>,
-  start: DateTime,
-  end: DateTime,
+  pub status: Option<String>,
+  pub color_id: Option<String>,
+  pub summary: Option<String>,
+  pub start: DateTime,
+  pub end: DateTime,
+  pub html_link: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -343,7 +344,7 @@ impl State {
           .json(&serde_json::json!({
             "id": uuid,
             "type": "web_hook",
-            "address": "https://entitia.com/api/webhook/v6",
+            "address": "https://entitia.com/api/webhook/v11",
           }))
           .send()
           .await;
@@ -411,10 +412,8 @@ impl State {
           uuid,
           resource_id: webhook.resource_id,
           expiry,
-          events: res.items.iter().map(|e| e.id.clone()).collect(),
           sync_token: res.next_sync_token,
         });
-
         
         app_state.write();
         drop(app_state);

@@ -112,6 +112,7 @@ pub async fn update_patient(req: HttpRequest, state: web::Data<AppState>, uuid: 
             description: Some(desc.clone()),
             summary: summary.clone(),
             id: id.to_owned(),
+            colorId: None,
           });
         });
       }

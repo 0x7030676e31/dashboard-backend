@@ -201,3 +201,5 @@ async fn asset(path: web::Path<String>) -> impl Responder {
 async fn index() -> impl Responder {
   HttpResponse::Ok().body(INDEX)
 }
+
+

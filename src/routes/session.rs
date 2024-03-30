@@ -61,6 +61,7 @@ pub async fn create_session(req: HttpRequest, state: web::Data<AppState>, new_se
     description: Some(patient.description.to_owned()),
     summary: format!("S. {}", if patient.name.is_empty() { "<Pacjent bez nazwy>" } else { patient.name.as_str() }),
     uuid: uuid.to_string(),
+    colorId: None,
   };
 
   session.write();
@@ -157,6 +158,7 @@ pub async fn update_session(req: HttpRequest, state: web::Data<AppState>, payloa
           description: Some(patient.description.to_owned()),
           summary: summary.clone(),
           id,
+          colorId: None,
         };
         
         match google::edit_event(&user.access_token, &event_edit).await {

@@ -17,12 +17,14 @@ fn client() -> &'static Client {
   )
 }
 
+#[allow(non_snake_case)]
 pub struct RawCalendarEvent {
   pub start: u64,
   pub end: u64,
   pub description: Option<String>,
   pub summary: String,
   pub uuid: String,
+  pub colorId: Option<String>
 }
 
 #[derive(Serialize, Debug)]
@@ -50,6 +52,7 @@ impl From<u64> for Time {
   }
 }
 
+#[allow(non_snake_case)]
 #[derive(Serialize, Debug)]
 pub struct CreateEvent<'a> {
   pub start: &'a Time,
@@ -57,6 +60,7 @@ pub struct CreateEvent<'a> {
   pub description: &'a Option<String>,
   pub summary: &'a String,
   pub id: &'a String,
+  pub colorId: &'a Option<String>
 }
 
 #[allow(dead_code)]
@@ -88,6 +92,7 @@ async fn add_events_batch(auth: &String, events: &[RawCalendarEvent]) -> Result<
       description: &event.description,
       summary: &event.summary,
       id: &event_id,
+      colorId: &event.colorId
     };
 
     let event = serde_json::to_string(&event)?;
@@ -138,6 +143,7 @@ pub async fn add_event(auth: &String, event: &RawCalendarEvent) -> Result<String
     description: &event.description,
     summary: &event.summary,
     id: &event_id,
+    colorId: &event.colorId
   };
 
   let event = serde_json::to_string(&event)?;
@@ -225,12 +231,14 @@ pub async fn delete_event(auth: &String, event: &String) -> Result<(), Box<dyn E
   Err(error.error.message.into())
 }
 
+#[allow(non_snake_case)]
 pub struct EditEvent {
   pub start: u64,
   pub end: u64,
   pub description: Option<String>,
   pub summary: String,
   pub id: String,
+  pub colorId: Option<String>
 }
 
 pub async fn edit_events(auth: &String, events: &[EditEvent]) -> Result<(), Box<dyn Error>> {
@@ -252,6 +260,7 @@ async fn edit_events_batch(auth: &String, events: &[EditEvent]) -> Result<(), Bo
       description: &event.description,
       summary: &event.summary,
       id: &event.id,
+      colorId: &event.colorId
     };
 
     let event = serde_json::to_string(&event)?;
@@ -300,6 +309,7 @@ pub async fn edit_event(auth: &String, event: &EditEvent) -> Result<(), Box<dyn 
     description: &event.description,
     summary: &event.summary,
     id: &event.id,
+    colorId: &event.colorId
   };
 
   let create_event = serde_json::to_string(&create_event)?;
