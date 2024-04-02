@@ -10,6 +10,7 @@ use std::fs;
 
 use actix_web::{web, HttpRequest, HttpResponse};
 use chrono::Utc;
+use futures::future;
 use reqwest::ClientBuilder;
 use serde::Deserialize;
 use uuid::Uuid;
@@ -222,5 +223,86 @@ pub async fn create_event(req: HttpRequest, state: web::Data<AppState>, data: we
   app_state.broadcast(payload).await;
   
   app_state.sessions.push(session);
+  Ok(HttpResponse::Ok().finish())
+}
+
+#[derive(Debug, Deserialize)]
+struct DeleteBody {
+  id: String,
+  kind: u8
+}
+
+#[actix_web::delete("/event")]
+pub async fn delete_event(req: HttpRequest, state: web::Data<AppState>, body: web::Json<DeleteBody>) -> Result<HttpResponse, actix_web::Error> {  
+  if !(2..=4).contains(&body.kind) {
+    return Err(actix_web::error::ErrorBadRequest("Invalid kind"));
+  }
+  
+  let mut app_state = state.write().await;
+  let user = app_state.check_auth(req)?;
+  
+  if body.kind == 2 || body.kind == 4 {
+    let session = match app_state.sessions.iter().find(|s| s.uuid == body.id) {
+      Some(session) => session,
+      None => return Ok(HttpResponse::NotFound().finish()),
+    };
+
+    let users = future::join_all(app_state.users.values().map(|u| u.read())).await;
+    for (email, id) in session.calendar_ids.iter() {
+      let user = users.iter().find(|u| &u.user_info.email == email).unwrap();
+      match google::delete_event(&user.access_token, &id).await {
+        Ok(_) => {},
+        Err(err) => { error!("Failed to delete event for user {}: {}", user.user_info.email, err); },
+      };
+    }
+
+    session.delete();
+    app_state.broadcast(SseEvent::SessionRemoved(&body.id)).await;
+
+    drop(users);
+    app_state.sessions.retain(|s| s.uuid != body.id);
+  }
+
+  if body.kind == 3 {
+    let user = user.read().await;
+    if let Err(e) = google::delete_event(&user.access_token, &body.id).await {
+      error!("Failed to delete event for user {}: {}", user.user_info.email, e);
+      return Ok(HttpResponse::InternalServerError().finish());
+    }
+  }
+
+  Ok(HttpResponse::Ok().finish())
+}
+
+#[derive(Debug, Deserialize)]
+struct EditBody {
+  start: u64,
+  end: u64,
+  color_id: Option<String>,
+  summary: String,
+}
+
+#[actix_web::put("/event/{id}")]
+pub async fn edit_event(req: HttpRequest, state: web::Data<AppState>, body: web::Json<EditBody>, id: web::Path<String>) -> Result<HttpResponse, actix_web::Error> {
+  let app_state = state.read().await;
+  let user = app_state.check_auth(req)?;
+
+  let body = body.into_inner();
+  let user = user.read().await;
+
+  let event = google::EditEvent {
+    start: body.start,
+    end: body.end,
+    description: None,
+    summary: body.summary,
+    id: id.to_string(),
+    colorId: body.color_id,
+  };
+
+  if let Err(e) = google::edit_event(&user.access_token, &event).await {
+    error!("Failed to edit event for user {}: {}", user.user_info.email, e);
+    return Ok(HttpResponse::InternalServerError().finish());
+  }
+
   Ok(HttpResponse::Ok().finish())
 }

@@ -22,6 +22,8 @@ fn api() -> Scope {
     .service(event::index)
     .service(event::get_events)
     .service(event::create_event)
+    .service(event::delete_event)
+    .service(event::edit_event)
     .service(sessions())
     .service(patients())
     .service(settings::index)
