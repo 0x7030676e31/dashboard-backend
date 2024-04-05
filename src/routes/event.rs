@@ -111,24 +111,73 @@ pub async fn index(req: HttpRequest, state: web::Data<AppState>) -> HttpResponse
     }
   };
 
+  let user_email = app_state.users.get(&user).unwrap().read().await.user_info.email.clone();
+
   for event in google_req.items.into_iter() {
     match event {
       Item::Event(event) => {
         match events.iter_mut().find(|e| e.id == event.id) {
           Some(target) => {
             app_state.broadcast_to(SseEvent::EventUpdated(&event), &user).await;
+            let is_session = app_state.sessions.iter().any(|s| s.calendar_ids.get(&user_email).is_some_and(|id| id == &event.id));
+            if (target.start != event.start || target.end != event.end) && is_session {
+              let session = app_state.sessions.iter_mut().find(|s| s.calendar_ids.get(&user_email).is_some_and(|id| id == &event.id)).unwrap();
+              session.start = event.start.into_timestamp();
+              session.end = event.end.into_timestamp();
+              session.last_updated = Utc::now().timestamp() as u64;
+              session.write();
+              
+              let session_clone = session.clone();
+              app_state.broadcast(SseEvent::SessionUpdated(&session_clone)).await;
+            }
+
             info!("Updated event {} in the local state", event.id);
             *target = event;
           },
           None => {
             app_state.broadcast_to(SseEvent::EventAdded(&event), &user).await;
             info!("Added event {} to the local state", event.id);
+            let is_already_session = app_state.sessions.iter().any(|s| s.calendar_ids.get(&user_email).is_some_and(|id| id == &event.id));
+            if let Some(summary) = &event.summary && summary.starts_with("S. ") && !is_already_session {
+              let patient_name = summary.splitn(2, ' ').nth(1);
+              if let Some(patient_name) = patient_name {
+                let patient = app_state.patients.iter().find(|p| p.name == patient_name);
+                if let Some(patient) = patient {
+                  let session = Session {
+                    uuid: Uuid::new_v4().to_string(),
+                    patient_uuid: patient.uuid.clone(),
+                    start: event.start.into_timestamp(),
+                    end: event.end.into_timestamp(),
+                    paid: 0.0,
+                    emotions: Vec::new(),
+                    timeline: HashMap::new(),
+                    created_at: Utc::now().timestamp() as u64,
+                    last_updated: Utc::now().timestamp() as u64,
+                    calendar_ids: HashMap::from([(user_email.clone(), event.id.to_owned())]),
+                  };
+
+                  session.write();
+                  app_state.broadcast(SseEvent::SessionAdded(&session)).await;
+                  app_state.sessions.push(session);
+                }
+              } 
+            }
+
             events.push(event);
           },
         };
       },
       Item::Deleted(event) => {
         events.retain(|e| e.id != event.id);
+        let session = app_state.sessions.iter().find(|s| s.calendar_ids.get(&user_email).is_some_and(|id| id == &event.id));
+        if let Some(session) = session {
+          session.delete();
+          app_state.broadcast(SseEvent::SessionRemoved(&session.uuid)).await;
+          
+          let session_uuid = session.uuid.clone();
+          app_state.sessions.retain(|s| s.uuid != session_uuid);
+        }
+
         app_state.broadcast_to(SseEvent::EventRemoved(&event.id), &user).await;
         info!("Deleted event {} from the local state", event.id);
       },

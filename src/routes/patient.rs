@@ -79,7 +79,7 @@ pub async fn update_patient(req: HttpRequest, state: web::Data<AppState>, uuid: 
   }
 
   if let Some(age) = age {
-    patient.age = Some(age);
+    patient.age = if age == 0 { None } else { Some(age) };
   }
 
   let mut do_update = false;

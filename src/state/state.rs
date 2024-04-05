@@ -79,10 +79,16 @@ pub struct GoogleEvent {
   pub html_link: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DateTime {
   date_time: String,
+}
+
+impl DateTime {
+  pub fn into_timestamp(&self) -> u64 {
+    chrono::DateTime::parse_from_rfc3339(&self.date_time).unwrap().timestamp() as u64
+  }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
