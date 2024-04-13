@@ -138,29 +138,26 @@ pub async fn index(req: HttpRequest, state: web::Data<AppState>) -> HttpResponse
             app_state.broadcast_to(SseEvent::EventAdded(&event), &user).await;
             info!("Added event {} to the local state", event.id);
             let is_already_session = app_state.sessions.iter().any(|s| s.calendar_ids.get(&user_email).is_some_and(|id| id == &event.id));
-            if let Some(summary) = &event.summary && summary.starts_with("S. ") && !is_already_session {
-              let patient_name = summary.splitn(2, ' ').nth(1);
-              if let Some(patient_name) = patient_name {
-                let patient = app_state.patients.iter().find(|p| p.name == patient_name);
-                if let Some(patient) = patient {
-                  let session = Session {
-                    uuid: Uuid::new_v4().to_string(),
-                    patient_uuid: patient.uuid.clone(),
-                    start: event.start.into_timestamp(),
-                    end: event.end.into_timestamp(),
-                    paid: 0.0,
-                    emotions: Vec::new(),
-                    timeline: HashMap::new(),
-                    created_at: Utc::now().timestamp() as u64,
-                    last_updated: Utc::now().timestamp() as u64,
-                    calendar_ids: HashMap::from([(user_email.clone(), event.id.to_owned())]),
-                  };
+            if let Some(summary) = &event.summary && !is_already_session {
+              let patient = app_state.patients.iter().find(|p| &p.name == summary);
+              if let Some(patient) = patient {
+                let session = Session {
+                  uuid: Uuid::new_v4().to_string(),
+                  patient_uuid: patient.uuid.clone(),
+                  start: event.start.into_timestamp(),
+                  end: event.end.into_timestamp(),
+                  paid: 0.0,
+                  emotions: Vec::new(),
+                  timeline: HashMap::new(),
+                  created_at: Utc::now().timestamp() as u64,
+                  last_updated: Utc::now().timestamp() as u64,
+                  calendar_ids: HashMap::from([(user_email.clone(), event.id.to_owned())]),
+                };
 
-                  session.write();
-                  app_state.broadcast(SseEvent::SessionAdded(&session)).await;
-                  app_state.sessions.push(session);
-                }
-              } 
+                session.write();
+                app_state.broadcast(SseEvent::SessionAdded(&session)).await;
+                app_state.sessions.push(session);
+              }
             }
 
             events.push(event);

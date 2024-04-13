@@ -1,3 +1,4 @@
+use crate::macros::path;
 use crate::state::session::{SessionSocket, Session, Emotion};
 use crate::{AppState, google};
 use crate::state::state::SseEvent;
@@ -5,12 +6,19 @@ use crate::logs::*;
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::{fs, env};
+use std::time::Instant;
 
 use actix_web::delete;
 use actix_web::{HttpRequest, web, Error, HttpResponse, get, post, patch};
 use actix_web_actors::ws;
+use chrono::Datelike;
 use futures_util::future;
 use serde::Deserialize;
+use tokio::process::Command;
+use uuid::Uuid;
+
+const TEMPLATE: &str = include_str!("../../template.html");
 
 #[derive(Deserialize)]
 struct NewPatient {
@@ -31,8 +39,8 @@ pub async fn create_session(req: HttpRequest, state: web::Data<AppState>, new_se
   let NewPatient { patient, time_start, time_end } = new_session.into_inner();
   info!("Created session for patient {}", patient);
 
-  let emotion_uuid = uuid::Uuid::new_v4();
-  let uuid = uuid::Uuid::new_v4();
+  let emotion_uuid = Uuid::new_v4();
+  let uuid = Uuid::new_v4();
 
   let session = Session {
     uuid: uuid.to_string(),
@@ -238,3 +246,175 @@ pub async fn stream(req: HttpRequest, state: web::Data<AppState>, payload: web::
   let resp = ws::start(socket, &req, payload)?;
   Ok(resp)
 }
+
+fn get_emotion_code(id: u8) -> u8 {
+  id % 30 / 5
+}
+
+const TABLE: [&str; 60] = [
+  "NIEODWZAJEMNIONA MIŁOŚĆ",
+  "OPUSZCZENIE",
+  "PORZUCENIE",
+  "ZAGUBIENIE",
+  "ZDRADA",
+  "MARTWIENIE SIĘ",
+  "NIEPOKÓJ",
+  "ODRAZA",
+  "ROZPACZ",
+  "ZDENERWOWANIE",
+  "ODRZUCENIE",
+  "PŁACZ",
+  "SMUTEK",
+  "ZNIECHĘCENIE",
+  "ŻAŁOŚĆ",
+  "NIENAWIŚĆ",
+  "POCZUCIE WINY",
+  "ROZGORYCZENIE",
+  "URAZA",
+  "ZŁOŚĆ",
+  "GROZA",
+  "OBWINIANIE",
+  "PRZERAŻENIE",
+  "STRACH",
+  "ZIRYTOWANIE",
+  "PONIŻENIE",
+  "POŻĄDANIE",
+  "PRZYTŁOCZENIE",
+  "TĘSKNOTA",
+  "ZAZDROŚĆ",
+  "EUFORIA",
+  "NIEDOCENIENIE",
+  "NIEPEWNOŚĆ",
+  "WRAŻLIWOŚĆ",
+  "ZŁAMANE SERCE",
+  "BEZNADZIEJA",
+  "BEZSILNOŚĆ",
+  "BRAK KONTROLI",
+  "NISKA SAMOOCENA",
+  "PORAŻKA",
+  "DEFENSYWNOŚĆ",
+  "SAMOKRZYWDZENIE",
+  "ZACIĘTOŚĆ",
+  "ZDEZORIETOWANIE",
+  "ŻAL",
+  "BRAK UZNANIA",
+  "DEPRESJA",
+  "FRUSTRACJA",
+  "NIEZDECYDOWANIE",
+  "PANIKA",
+  "BRAK WSPARCIA",
+  "BYCIE BEZ WYRAZU",
+  "KONFLIKTOWOŚĆ",
+  "NIEPEWNOŚĆ TWORZENIA",
+  "BYCIE ZASTRASZONYM",
+  "BYCIE BEZWARTOŚCIOWYM",
+  "BYCIE NIEGODNYM",
+  "DUMA",
+  "WSTYD",
+  "WSTRZĄS",
+];
+
+const KIND_TABLE: [&str; 4] = [
+  "WŁASNA",
+  "ODZIEDZICZONA",
+  "NABYTA",
+  "PRENATALNA",
+];
+
+#[post("/{session}/pdf")]
+pub async fn gen_pdf(req: HttpRequest, state: web::Data<AppState>, session: web::Path<String>) -> Result<HttpResponse, Error> {
+  let session = session.into_inner();
+  let app_state = state.clone();
+  let app_state = app_state.read().await;
+
+  app_state.auth_token(req)?;
+  let session = match app_state.sessions.iter().find(|s| s.uuid == session) {
+    Some(session) => session,
+    None => return Ok(HttpResponse::NotFound().body("Not Found")),
+  };
+
+  let patient = match app_state.patients.iter().find(|p| p.uuid == session.patient_uuid) {
+    Some(patient) => patient,
+    None => return Ok(HttpResponse::NotFound().body("Patient not found")),
+  };
+
+  info!("Generating PDF for session {}", session.uuid);
+  let now = Instant::now();
+
+  let session_date = chrono::NaiveDateTime::from_timestamp_opt(session.start as i64, 0).unwrap();
+  let mut percentages = [0; 6];
+  
+  let mut idx = 0;
+  let emotions = session.emotions.iter().rev().filter_map(|emotion| emotion.id.map(|id| {
+    let code = get_emotion_code(id);
+    percentages[code as usize] += 1;
+    idx += 1;
+    format!(
+      "<tr class=\"_{}\"><td>{}. {}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+      code + 1,
+      idx,
+      TABLE[id as usize],
+      emotion.kind.map_or("—", |kind| KIND_TABLE[kind as usize]),
+      emotion.aquired_age.map_or("—".to_string(), |age| age.to_string()),
+      emotion.aquired_person.is_empty().then(|| "—").unwrap_or(&emotion.aquired_person),
+    )
+  })).collect::<Vec<_>>();
+
+  let sum = percentages.iter().sum::<i32>() as f32;
+  let mut percentages = percentages.iter().map(|&count| (count as f32 / sum * 100.0) as u8).collect::<Vec<_>>();
+  if !emotions.is_empty() {
+    percentages[5] = 100 - percentages.iter().take(5).sum::<u8>();
+  }
+
+  let percentages = percentages.iter().enumerate().map(|(idx, perc)| format!(
+    "<td class=\"_{}\">{}%</td>",
+    idx + 1,
+    perc,
+  )).collect::<Vec<_>>();
+
+  let html = TEMPLATE
+    .replace("{{name}}", &patient.name)
+    .replace("{{dd}}", &session_date.day().to_string())
+    .replace("{{mm}}", &session_date.month().to_string())
+    .replace("{{yy}}", &session_date.year().to_string())
+    .replace("{{emotions}}", &emotions.join(""))
+    .replace("{{percentages}}", &percentages.join(""));
+
+  let session_uuid = session.uuid.clone();
+  drop(app_state);
+
+  let uuid = Uuid::new_v4();
+  fs::write(format!("{}pdf/{}.html", path(), uuid), html).unwrap();
+
+  let is_production = env::var("PRODUCTION").map_or(false, |production| production == "true");
+  let prefix = if is_production { "/root/dashboard/".into() } else { env::var("FS").unwrap_or("/root/dashboard/".into()) };
+
+  let cmd = Command::new("html2pdf")
+    .arg("--background")
+    .arg("--margin")
+    .arg("0")
+    .arg("--output")
+    .arg(format!("{}pdf/{}.pdf", prefix, uuid))
+    .arg(format!("{}pdf/{}.html", prefix, uuid))
+    .output()
+    .await;
+
+  let res = match cmd {
+    Ok(res) => res,
+    Err(err) => {
+      error!("Failed to generate PDF for session {}: {}", session_uuid, err);
+      return Ok(HttpResponse::InternalServerError().finish());
+    },
+  };
+
+  if !res.status.success() {
+    error!("Failed to generate PDF for session {}: {}", session_uuid, String::from_utf8_lossy(&res.stderr));
+    return Ok(HttpResponse::InternalServerError().finish());
+  }
+
+  fs::remove_file(format!("{}pdf/{}.html", path(), uuid)).unwrap();
+  info!("Generated PDF for session {}, took {}ms", session_uuid, now.elapsed().as_millis());
+
+  Ok(HttpResponse::Ok().body(uuid.to_string()))
+}
+

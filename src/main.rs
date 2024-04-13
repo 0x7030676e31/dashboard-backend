@@ -1,15 +1,13 @@
 #![feature(async_closure, let_chains)]
 
 use crate::state::state::State;
+use crate::macros::path;
 
 use std::sync::Arc;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io;
-use std::env;
+use std::{env, io, fs};
 
-use actix_web::dev::Service;
-use actix_web::http::header;
 use actix_web::{HttpResponse, HttpServer, App, web, Responder};
 use actix_web_lab::middleware::{from_fn, redirect_to_non_www};
 use actix_web::web::Data;
@@ -26,6 +24,7 @@ mod consts;
 mod google;
 mod backup;
 mod filestreamer;
+mod cors;
 
 pub use macros::macros as logs;
 pub type AppState = Arc<RwLock<State>>;
@@ -87,13 +86,6 @@ pub struct EnvVars {
   users: Vec<String>,
 }
 
-const ORIGINS: [&str; 4] = [
-  "https://entitia.com",
-  "https://www.entitia.com",
-  "https://entitia.pl",
-  "https://www.entitia.pl",
-];
-
 #[tokio::main]
 async fn main() -> io::Result<()> {
   dotenv::dotenv().ok();
@@ -133,34 +125,18 @@ async fn main() -> io::Result<()> {
   logs::info!("Starting server on inner port {}...", inner_port);
   backup::start_backup_loop(&path);
 
+  fs::create_dir_all(format!("{}pdf", path)).unwrap();
   let server = HttpServer::new(move || {
     App::new()
       .app_data(Data::new(state.clone()))
       .app_data(Data::new(env_vars.clone()))
       .route("/assets/{path:.*}", web::get().to(asset))
+      .route("/{pdf}/pdf", web::get().to(get_pdf))
       .route("/", web::get().to(index))
       .default_service(web::get().to(index))
       .service(routes::get_routes())
       .wrap(from_fn(redirect_to_non_www))
-      .wrap_fn(|req, srv| {
-        let origin = req.headers().get("origin").map(|origin| origin.to_str().unwrap_or("")).unwrap_or("");
-        let origin = origin.trim_end_matches('/').to_owned();
-
-        let fut = srv.call(req);
-        async move {
-          let mut res = fut.await?;
-          
-          if ORIGINS.contains(&origin.as_str()) {
-            res.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, header::HeaderValue::from_str(&origin).unwrap());
-          }
-
-          res.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, header::HeaderValue::from_static("*"));
-          res.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_METHODS, header::HeaderValue::from_static("POST, GET, PATCH, DELETE, OPTIONS"));
-          res.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_HEADERS, header::HeaderValue::from_static("content-type, authorization"));
-          
-          Ok(res)
-        }
-      })
+      .wrap(cors::Cors)
   });
 
   if !is_production {
@@ -202,4 +178,15 @@ async fn index() -> impl Responder {
   HttpResponse::Ok().body(INDEX)
 }
 
+
+// #[get("/{uuid}/pdf")]
+pub async fn get_pdf(pdf: web::Path<String>) -> HttpResponse {
+  let pdf = pdf.into_inner();
+  let path = format!("{}pdf/{}.pdf", path(), pdf);
+
+  match fs::read(path) {
+    Ok(pdf) => HttpResponse::Ok().content_type("application/pdf").body(pdf),
+    Err(_) => HttpResponse::NotFound().finish(),
+  }
+}
 

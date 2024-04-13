@@ -36,6 +36,7 @@ fn sessions() -> Scope {
     .service(session::update_session)
     .service(session::delete_session)
     .service(session::stream)
+    .service(session::gen_pdf)
 }
 
 fn patients() -> Scope {

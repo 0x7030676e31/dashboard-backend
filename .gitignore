@@ -4,3 +4,4 @@
 .env.prod
 build.sh
 .VSCodeCounter
+test.html
