@@ -132,6 +132,7 @@ async fn main() -> io::Result<()> {
       .app_data(Data::new(env_vars.clone()))
       .route("/assets/{path:.*}", web::get().to(asset))
       .route("/{pdf}/pdf", web::get().to(get_pdf))
+      .route("/{pdf}/html", web::get().to(get_html))
       .route("/", web::get().to(index))
       .default_service(web::get().to(index))
       .service(routes::get_routes())
@@ -190,3 +191,12 @@ pub async fn get_pdf(pdf: web::Path<String>) -> HttpResponse {
   }
 }
 
+pub async fn get_html(html: web::Path<String>) -> HttpResponse {
+  let html = html.into_inner();
+  let path = format!("{}pdf/{}.html", path(), html);
+
+  match fs::read(path) {
+    Ok(html) => HttpResponse::Ok().content_type("text/html").body(html),
+    Err(_) => HttpResponse::NotFound().finish(),
+  }
+}

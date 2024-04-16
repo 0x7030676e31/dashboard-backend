@@ -16,6 +16,7 @@ dotenv = "0.15.0"
 env_logger = "0.11.0"
 futures = "0.3.28"
 futures-util = "0.3.28"
+headless_chrome = "1.0.9"
 include_dir = "0.7.3"
 log = "0.4.20"
 reqwest = { version = "0.11.22", features = ["json", "native-tls"] }

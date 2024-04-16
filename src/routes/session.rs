@@ -15,7 +15,8 @@ use actix_web_actors::ws;
 use chrono::Datelike;
 use futures_util::future;
 use serde::Deserialize;
-use tokio::process::Command;
+use headless_chrome::types::PrintToPdfOptions;
+use headless_chrome::{Browser, LaunchOptions};
 use uuid::Uuid;
 
 const TEMPLATE: &str = include_str!("../../template.html");
@@ -386,35 +387,78 @@ pub async fn gen_pdf(req: HttpRequest, state: web::Data<AppState>, session: web:
   let uuid = Uuid::new_v4();
   fs::write(format!("{}pdf/{}.html", path(), uuid), html).unwrap();
 
+  let opt = LaunchOptions {
+    headless: true,
+    sandbox: false,
+    ..Default::default()
+  };
+
+  let browser = match Browser::new(opt) {
+    Ok(browser) => browser,
+    Err(err) => {
+      error!("Failed to launch browser for session {}: {}", session_uuid, err);
+      return Ok(HttpResponse::InternalServerError().finish());
+    },
+  };
+
+  let tab = match browser.new_tab() {
+    Ok(tab) => tab,
+    Err(err) => {
+      error!("Failed to create tab for session {}: {}", session_uuid, err);
+      return Ok(HttpResponse::InternalServerError().finish());
+    },
+  };
+
+  let opt = PrintToPdfOptions {
+    landscape: Some(false),
+    display_header_footer: Some(false),
+    print_background: Some(true),
+    scale: Some(1.0),
+    paper_width: Some(8.27),
+    paper_height: Some(11.7),
+    margin_top: Some(0.0),
+    margin_bottom: Some(0.0),
+    margin_left: Some(0.0),
+    margin_right: Some(0.0),
+    page_ranges: None,
+    ignore_invalid_page_ranges: None,
+    header_template: None,
+    footer_template: None,
+    prefer_css_page_size: None,
+    transfer_mode: None,
+  };
+
   let is_production = env::var("PRODUCTION").map_or(false, |production| production == "true");
-  let prefix = if is_production { "/root/dashboard/".into() } else { env::var("FS").unwrap_or("/root/dashboard/".into()) };
+  let url = if is_production { format!("https://entitia.com/{}/html", uuid) } else { format!("http://localhost:{}/{}/html", env::var("INNER_PORT").unwrap_or("2137".into()), uuid) };
 
-  let cmd = Command::new("html2pdf")
-    .arg("--background")
-    .arg("--margin")
-    .arg("0")
-    .arg("--output")
-    .arg(format!("{}pdf/{}.pdf", prefix, uuid))
-    .arg(format!("{}pdf/{}.html", prefix, uuid))
-    .output()
-    .await;
-
-  let res = match cmd {
+  let tab = match tab.navigate_to(&url) {
     Ok(res) => res,
+    Err(err) => {
+      error!("Failed to navigate to file:// for session {}: {}", session_uuid, err);
+      return Ok(HttpResponse::InternalServerError().finish());
+    },
+  };
+
+  let tab = match tab.wait_until_navigated() {
+    Ok(res) => res,
+    Err(err) => {
+      error!("Failed to wait until navigated for session {}: {}", session_uuid, err);
+      return Ok(HttpResponse::InternalServerError().finish());
+    },
+  };
+
+  let bytes = match tab.print_to_pdf(Some(opt)) {
+    Ok(bytes) => bytes,
     Err(err) => {
       error!("Failed to generate PDF for session {}: {}", session_uuid, err);
       return Ok(HttpResponse::InternalServerError().finish());
     },
   };
 
-  if !res.status.success() {
-    error!("Failed to generate PDF for session {}: {}", session_uuid, String::from_utf8_lossy(&res.stderr));
-    return Ok(HttpResponse::InternalServerError().finish());
-  }
-
+  fs::write(format!("{}pdf/{}.pdf", path(), uuid), bytes).unwrap();
   fs::remove_file(format!("{}pdf/{}.html", path(), uuid)).unwrap();
+
   info!("Generated PDF for session {}, took {}ms", session_uuid, now.elapsed().as_millis());
 
   Ok(HttpResponse::Ok().body(uuid.to_string()))
 }
-
